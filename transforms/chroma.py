@@ -1,4 +1,26 @@
 
+"""
+Chroma Transform service for the audio processing pipeline.
+This service is responsible for:
+- Receiving `AudioChunk` inputs from the chunking stage.
+- Computing chroma features for each chunk.
+- Forwarding `ChromaChunk` outputs to downstream services.
+
+The Chroma service adheres to the following Contract:
+
+Boundary: ** Chunking -> Transforms[Chroma] **
+Uses `AudioChunk` dataclass for incoming audio chunks
+
+Boundary: ** Transforms[Chroma] -> (Tone Identifier | Channel Predictor) **
+Uses `ChromaChunk` dataclass for outgoing chroma features
+
+Inputs:
+- `AudioChunk` dataclass for incoming audio chunks
+Outputs:
+- `ChromaChunk` dataclass for outgoing chroma features
+- Logging of processing steps and errors for observability
+"""
+
 import httpx
 from fastapi import FastAPI
 

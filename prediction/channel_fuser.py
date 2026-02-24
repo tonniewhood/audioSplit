@@ -1,5 +1,27 @@
 
 
+"""
+Channel Fuser service for the audio processing pipeline.
+This service is responsible for:
+- Receiving predicted chunks from the Channel Predictor.
+- Fusing per-class predictions into a final audio representation.
+- Emitting `OutputAudioFile` for the Gateway to return to the web app.
+
+The Channel Fuser service adheres to the following Contract:
+
+Boundary: ** Channel Predictor -> Channel Fuser **
+Uses `PredictedChunk` dataclass for incoming predictions
+
+Boundary: ** Channel Fuser -> Gateway **
+Uses `OutputAudioFile` dataclass for outgoing fused audio
+
+Inputs:
+- `PredictedChunk` dataclass for incoming predictions
+Outputs:
+- `OutputAudioFile` dataclass for outgoing fused audio
+- Logging of processing steps and errors for observability
+"""
+
 import httpx
 from fastapi import FastAPI
 

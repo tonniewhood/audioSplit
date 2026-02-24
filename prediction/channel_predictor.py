@@ -1,4 +1,31 @@
 
+"""
+Channel Predictor service for the audio processing pipeline.
+This service is responsible for:
+- Receiving feature representations from transform services.
+- Receiving tone predictions from the Tone Identifier.
+- Producing per-class predictions for each audio chunk.
+
+The Channel Predictor service adheres to the following Contract:
+
+Boundary: ** Transforms[FFT|CQT|Chroma] -> Channel Predictor **
+Uses `FFTChunk`, `CQTChunk`, and `ChromaChunk` dataclasses for incoming features
+
+Boundary: ** Tone Identifier -> Channel Predictor **
+Uses `TonePrediction` dataclass for incoming tone predictions
+
+Boundary: ** Channel Predictor -> Channel Fuser **
+Uses `PredictedChunk` dataclass for outgoing predictions
+
+Inputs:
+- `FFTChunk`, `CQTChunk`, and `ChromaChunk` dataclasses for incoming features
+- `TonePrediction` dataclass for incoming tone predictions
+Outputs:
+- `PredictedChunk` dataclasses for outgoing predictions (should be 3 per chunk, one for each transform)
+- Logging of processing steps and errors for observability
+
+"""
+
 import asyncio
 import httpx
 from fastapi import FastAPI

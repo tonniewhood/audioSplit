@@ -1,4 +1,27 @@
 
+"""
+CQT Transform service for the audio processing pipeline.
+This service is responsible for:
+- Receiving `AudioChunk` inputs from the chunking stage.
+- Computing Constant-Q Transform (CQT) features for each chunk.
+- Forwarding `CQTChunk` outputs to downstream services.
+
+The CQT service adheres to the following Contract:
+
+Boundary: ** Chunking -> Transforms[CQT] **
+Uses `AudioChunk` dataclass for incoming audio chunks
+
+Boundary: ** Transforms[CQT] -> (Tone Identifier | Channel Predictor) **
+Uses `CQTChunk` dataclass for outgoing CQT features
+
+Inputs:
+- `AudioChunk` dataclass for incoming audio chunks
+Outputs:
+- `CQTChunk` dataclass for outgoing CQT features
+- Logging of processing steps and errors for observability
+
+"""
+
 import httpx
 from fastapi import FastAPI
 

@@ -1,4 +1,29 @@
 
+"""
+Tone Identifier service for the audio processing pipeline.
+This service is responsible for:
+- Receiving frequency-domain features from the transform services.
+- Building a `Spectrogram` representation for tone analysis.
+- Producing `TonePrediction` outputs for downstream services.
+
+The Tone Identifier service adheres to the following Contract:
+
+Boundary: ** Transforms[FFT] -> Tone Identifier **
+Uses `FFTChunk` dataclass for incoming features
+
+Boundary: ** (Internal) **
+Uses `Spectrogram` dataclass for internal tone analysis
+
+Boundary: ** Tone Identifier -> Channel Predictor **
+Uses `TonePrediction` dataclass for outgoing predictions
+
+Inputs:
+- `FFTChunk` dataclass for incoming features
+Outputs:
+- `TonePrediction` dataclass for outgoing predictions
+- Logging of processing steps and errors for observability
+"""
+
 import httpx
 from fastapi import FastAPI
 
