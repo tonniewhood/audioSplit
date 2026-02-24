@@ -1,0 +1,84 @@
+# Python bytecode / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Native extensions
+*.so
+
+# Packaging / build
+.Python
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Tool caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.pyre/
+.hypothesis/
+.tox/
+.nox/
+
+# Coverage / test output
+.coverage
+.coverage.*
+htmlcov/
+
+# Jupyter / IPython
+.ipynb_checkpoints/
+profile_default/
+ipython_config.py
+
+# Environment / local settings
+.env
+.env.*
+*.local
+
+# FastAPI / Uvicorn runtime files
+*.log
+logs/
+
+# ML artifacts (TensorFlow / PyTorch)
+checkpoints/
+runs/
+wandb/
+lightning_logs/
+tensorboard/
+events.out.tfevents.*
+*.ckpt
+*.pt
+*.pth
+*.onnx
+
+# Data artifacts (common for signal/audio workflows)
+data/
+datasets/
+artifacts/
+outputs/
+
+# Editors / OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Temp files
+*.tmp
+*/temp/
+*/.temp/
+*/temp/
+*/.tmp
+

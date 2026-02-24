@@ -1,0 +1,137 @@
+
+h1 {
+    font-size: 2em;
+    margin-bottom: 0.5em;
+    color: #434141;
+}
+
+body {
+    background-color: #6fe7ef;
+    min-height: 100vh;
+    padding: 20px;
+}
+
+.container {
+    max-width: 720px;
+    margin: 80px auto;
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 24px;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+}
+
+.dropzone {
+    margin-top: 16px;
+    border: 2px solid #7aa7c7;
+    border-radius: 12px;
+    padding: 36px 24px;
+    text-align: center;
+    background: #f7fbff;
+    cursor: pointer;
+    position: relative;
+}
+
+.dropzone:focus {
+    outline: 2px solid #1f6feb;
+    outline-offset: 2px;
+}
+
+.dropzone.dragover {
+    border-color: #1f6feb;
+    background: #eef5ff;
+}
+
+.dropzone input[type="file"] {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+}
+
+.dropzone-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #1b2b34;
+}
+
+.dropzone-subtitle {
+    margin-top: 4px;
+    color: #4f5b66;
+}
+
+.dropzone-filled {
+    display: none;
+}
+
+.dropzone.filled .dropzone-empty {
+    display: none;
+}
+
+.dropzone.filled .dropzone-filled {
+    display: block;
+}
+
+.dropzone.filled input[type="file"] {
+    pointer-events: none;
+}
+
+.file-name {
+    margin-top: 6px;
+    font-family: monospace;
+    color: #2c3e50;
+    font-size: 1rem;
+}
+
+.file-actions {
+    margin-top: 12px;
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+}
+
+.file-actions button {
+    font-size: 0.95rem;
+    padding: 8px 14px;
+    border: none;
+    border-radius: 8px;
+    background: #1f6feb;
+    color: #ffffff;
+    cursor: pointer;
+}
+
+.file-actions button.secondary {
+    background: #9aa9b5;
+}
+
+.file-actions button:hover:not(:disabled) {
+    background: #1a5ed0;
+}
+
+.file-actions button.secondary:hover:not(:disabled) {
+    background: #8797a4;
+}
+
+.actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 16px;
+}
+
+.actions button {
+    font-size: 1rem;
+    padding: 10px 16px;
+    border: none;
+    border-radius: 8px;
+    background: #1f6feb;
+    color: #ffffff;
+    cursor: pointer;
+}
+
+.actions button:disabled {
+    background: #9ab7ea;
+    cursor: not-allowed;
+}
+
+.actions button:hover:not(:disabled) {
+    background: #1a5ed0;
+}

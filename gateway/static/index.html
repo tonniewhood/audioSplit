@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AudioSplit - Home</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+
+<body>
+    <main class="container">
+        <h1>Welcome to AudioSplit</h1>
+        <p>Select a file to send through the pipeline.</p>
+        <div id="dropzone" class="dropzone" tabindex="0">
+            <input id="file-input" type="file" />
+            <div class="dropzone-content">
+                <div id="dropzone-empty" class="dropzone-empty">
+                    <div class="dropzone-title">Drop a file here</div>
+                    <div class="dropzone-subtitle">or click to browse</div>
+                </div>
+                <div id="dropzone-filled" class="dropzone-filled">
+                    <div id="file-name" class="file-name">filename.ext</div>
+                    <div class="file-actions">
+                        <button id="clear-btn" type="button" class="secondary">Clear</button>
+                        <button id="browse-btn" type="button">Browse</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="actions">
+            <button id="send-btn" type="button" disabled>Send</button>
+        </div>
+    </main>
+
+    <script src="/static/app.js"></script>
+</body>
+
+</html>
