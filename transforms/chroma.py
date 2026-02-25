@@ -1,4 +1,3 @@
-
 """
 Chroma Transform service for the audio processing pipeline.
 This service is responsible for:
@@ -22,33 +21,70 @@ Outputs:
 """
 
 import httpx
+import numpy as np
 from fastapi import FastAPI
 
+import common.constants as cc
+import common.interfaces as ci
 from common.logging_utils import setup_logging
-from common.interfaces import AlertPayload
+
 
 # Service objects
 app = FastAPI()
 logger = setup_logging("transforms-CHROMA")
 
-CHANNEL_PREDICTOR_URL = "http://localhost:8005/api/channel_predictor"
 
-@app.post("/api/chroma")
-async def chroma(payload: AlertPayload):
-    logger.info(f"Received alert: {payload.message}; Source: {payload.source}")
-    trace = payload.trace + ["chroma:ACK"]
-    chroma_payload = AlertPayload(
-        request_id=payload.request_id,
-        message=payload.message,
-        trace=trace,
-        source="chroma",
+async def compute_chroma_features(chunk: ci.AudioChunk) -> ci.ChromaChunk:
+    """
+    Compute chroma features for the given audio chunk.
+
+    Args:
+        chunk (AudioChunk): The audio chunk to process.
+
+    Returns:
+        ChromaChunk: The computed chroma features.
+    """
+    # Placeholder for chroma computation logic
+    chroma_features = np.zeros(cc.NUM_PITCH_CLASSES, dtype=np.float32)
+    return ci.ChromaChunk(
+        request_id=chunk.request_id,
+        chunk_index=chunk.chunk_index,
+        total_chunks=chunk.total_chunks,
+        num_pitches=len(chroma_features),
+        dtype=np.float32,
+        pitch_classes=chroma_features,
     )
 
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.post(CHANNEL_PREDICTOR_URL, json=chroma_payload.model_dump())
-    except Exception as exc:
-        logger.exception("Forwarding failed")
-        return {"message": f"FAIL: chroma forwarding error: {exc}"}
 
-    return {"message": "ACK"}
+@app.post("/api/chroma")
+async def chroma(chunk: ci.AudioChunk) -> ci.JSONResponse:
+    """
+    Endpoint to receive audio chunks, compute chroma features, and forward results to Tone Identifier and Channel Predictor.
+
+    Args:
+        chunk (AudioChunk): The incoming audio chunk containing waveform data and metadata.
+
+    Returns:
+        JSONResponse: A response indicating the status of the operation.
+    """
+    logger.info(f"Received chunk: {chunk.request_id}")
+
+    try:
+        chroma_chunk = await compute_chroma_features(chunk)
+
+        logger.info(f"Computed chroma features for chunk: {chunk.request_id}, forwarding to downstream services.")
+
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(cc.CHANNEL_PREDICTOR_URL, json={**chroma_chunk.model_dump(), "source": "chroma"})
+
+    except Exception as exc:
+        logger.exception(f"Data Validation failed: {exc}")
+        return {
+            "status": 500,
+            "message": f"FAIL: Chroma processing error: {exc}",
+        }
+
+    return {
+        "status": 200,
+        "message": "ACK",
+    }

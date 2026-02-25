@@ -46,131 +46,50 @@ import numpy as np
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from librosa import load as librosa_load
-from numpy.typing import NDArray
-
+import common.constants as cc
+import common.interfaces as ci
 from common.logging_utils import setup_logging
-from common.interfaces import AudioChunk, InputAudioFile, OutputAudioFile, JSONResponse
+from librosa import load as librosa_load
 
 
 # Constants
 BASE_DIR = Path(__file__).resolve().parent
 INDEX_HTML = BASE_DIR / "static" / "index.html"
 
-# Input data constraints
-MAX_STR_LEN = 255
-MAX_FILE_SIZE_MB = 10
-MB_IN_BYTES = 1024 * 1024
-MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * MB_IN_BYTES
-CHUNK_SIZE = 1024
-SAMPLE_RATE = 44100
-FUSER_TIMEOUT = 10.0  # seconds
-ALLOWED_CONTENT_TYPES = {"audio/wav", "audio/mp3"}
-
-# URLs for downstream services
-FFT_URL = "http://localhost:8001/api/fft"
-CQT_URL = "http://localhost:8002/api/cqt"
-CHROMA_URL = "http://localhost:8003/api/chroma"
-
-
 # Service objects
 app = FastAPI()
 logger = setup_logging("gateway")
+pending_events: Dict[str, asyncio.Event] = {}
+pending_results: Dict[str, ci.OutputAudioFile] = {}
 
 # Mount static files
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
-pending_events: Dict[str, asyncio.Event] = {}
-pending_results: Dict[str, OutputAudioFile] = {}
 
-
-async def validate_input_file(request_id: str, file: UploadFile) -> InputAudioFile:
-    """
-    Validates the uploaded audio file and returns an InputAudioFile object.
-    
-    Args:
-        request_id (str): The unique identifier for the request.
-        file (UploadFile): The uploaded file to be validated.
-        
-    Returns:
-        InputAudioFile: An InputAudioFile object containing the validated file data.
-        
-    Raises:
-        AssertionError: If the validation fails.
-    """
-    # Perform validation logic here (e.g., check file type, size, etc.)
-    # Raise AssertionError if validation fails
-    assert file.content_type in ALLOWED_CONTENT_TYPES, f"Invalid file type. Allowed types: {', '.join(ALLOWED_CONTENT_TYPES)}."
-    assert file.filename, "Filename is required."
+async def create_input_file(request_id: str, file: UploadFile) -> ci.InputAudioFile:
     assert request_id, "Request ID is required."
-    assert len(file.filename) <= MAX_STR_LEN, "Filename is too long."
-    assert len(request_id) <= MAX_STR_LEN, "Request ID is too long."
-    assert file.size <= MAX_FILE_SIZE_BYTES, f"File size exceeds {MAX_FILE_SIZE_MB} MB limit."
+    assert len(request_id) <= cc.MAX_STR_LEN, "Request ID is too long."
+    assert file.filename, "Filename is required."
+    assert len(file.filename) <= cc.MAX_STR_LEN, "Filename is too long."
+    assert file.content_type in cc.ALLOWED_CONTENT_TYPES, (
+        f"Invalid file type. Allowed types: {', '.join(cc.ALLOWED_CONTENT_TYPES)}."
+    )
+
+    data, sample_rate = librosa_load(file.file, sr=cc.SAMPLE_RATE, mono=True)
     
-    data, Fs = librosa_load(file.file, sr=SAMPLE_RATE, mono=True)
-    
-    assert data.dtype == np.float32, "Audio data must be in float32 format."
-    assert isinstance(data, NDArray[np.float32]), "Audio data must be a numpy array of float32."
-    assert data.ndim == 1, "Audio data must be a 1D array. (Mono audio only)"
-    assert Fs == SAMPLE_RATE, f"Sample rate must be {SAMPLE_RATE} Hz."
-    assert len(data) > 0, "Audio file is too short to be processed."
-    
-    return InputAudioFile(
+    return ci.InputAudioFile(
         request_id=request_id,
         channels=1,
         num_samples=len(data),
         filename=file.filename,
-        num_chunks=int(np.ceil(len(data) / CHUNK_SIZE)),
+        num_chunks=int(np.ceil(len(data) / cc.MAX_CHUNK_SIZE)),
         dtype=np.float32,
         waveform=data,
-        sample_rate=SAMPLE_RATE,
+        sample_rate=sample_rate,
     )
-     
-async def validate_audio_chunk(request_id: str, chunk: AudioChunk) -> None:
-    """
-    Validates an AudioChunk object.
-    
-    Args:
-        request_id (str): The unique identifier for the request.
-        chunk (AudioChunk): The AudioChunk object to be validated.
-        
-    Raises:
-        AssertionError: If validation fails.
-    """
-    assert chunk.request_id == request_id, "Chunk request ID does not match."
-    assert chunk.chunk_index >= 0, "Chunk index must be non-negative."
-    assert chunk.num_chunks > 0, "Number of chunks must be positive."
-    assert chunk.channels == 1, "Only mono audio is supported."
-    assert chunk.sample_rate == SAMPLE_RATE, f"Sample rate must be {SAMPLE_RATE} Hz."
-    assert chunk.dtype == np.float32, "Audio chunk data type must be float32."
-    assert isinstance(chunk.waveform, NDArray[np.float32]), "Audio chunk waveform must be a numpy array of float32."
-    assert chunk.waveform.ndim == 1, "Audio chunk waveform must be a 1D array."
-    assert chunk.waveform.dtype == np.float32, "Audio chunk waveform must be in float32 format."
-    assert len(chunk.waveform) <= CHUNK_SIZE, f"Audio chunk size must be at most {CHUNK_SIZE} samples."
-        
-async def validate_output_file(output_file: OutputAudioFile) -> None:
-    """
-    Validates an OutputAudioFile object.
-    
-    Args:
-        output_file (OutputAudioFile): The OutputAudioFile object to be validated.
-        
-    Raises:
-        AssertionError: If validation fails.
-    """
-    assert output_file.request_id, "Request ID is required."
-    assert len(output_file.request_id) <= MAX_STR_LEN, "Request ID is too long."
-    assert output_file.filename, "Filename is required."
-    assert len(output_file.filename) <= MAX_STR_LEN, "Filename is too long."
-    assert output_file.channels == 1, "Only mono audio is supported."
-    assert output_file.sample_rate == SAMPLE_RATE, f"Sample rate must be {SAMPLE_RATE} Hz."
-    assert output_file.dtype == np.float32, "Audio data type must be float32."
-    assert isinstance(output_file.waveform, NDArray[np.float32]), "Audio waveform must be a numpy array of float32."
-    assert output_file.waveform.ndim == 1, "Audio waveform must be a 1D array."
-    assert output_file.waveform.dtype == np.float32, "Audio waveform must be in float32 format."
-    assert len(output_file.waveform) > 0, "Output audio file is too short to be valid."
-        
-async def send_to_transforms(chunk: AudioChunk) -> None:
+
+
+async def send_to_transforms(chunk: ci.AudioChunk) -> None:
     """
     Sends the initial payload to each of the transform services (FFT, CQT, Chroma).
     
@@ -180,16 +99,16 @@ async def send_to_transforms(chunk: AudioChunk) -> None:
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             await asyncio.gather(
-                client.post(FFT_URL, json=chunk.model_dump()),
-                client.post(CQT_URL, json=chunk.model_dump()),
-                client.post(CHROMA_URL, json=chunk.model_dump()),
+                client.post(cc.FFT_URL, json=chunk.model_dump()),
+                client.post(cc.CQT_URL, json=chunk.model_dump()),
+                client.post(cc.CHROMA_URL, json=chunk.model_dump()),
             )
     except Exception:
         logger.exception("Request failed")
         pending_events.pop(chunk.request_id, None)
         pending_results.pop(chunk.request_id, None)
 
-async def await_fuser(request_id: str, timeout: float = FUSER_TIMEOUT) -> OutputAudioFile | None:
+async def await_fuser(request_id: str, timeout: float = cc.FUSER_TIMEOUT) -> ci.OutputAudioFile | None:
     """
     Waits for the final result from the channel fuser for a given request ID.
     
@@ -220,7 +139,7 @@ async def root():
 async def alert(
     request_id: str = Form(...),
     file: UploadFile = File(...),
-) -> JSONResponse:
+) -> ci.JSONResponse:
     """
     Endpoint to receive the uploaded audio file from the web application, validate it, chunk it, and forward the chunks to the transform services.
     
@@ -235,7 +154,7 @@ async def alert(
     logger.info(f"Received file: {file.filename} with request_id: {request_id}")
     
     try:
-        audio_file = validate_input_file(request_id, file)
+        audio_file = await create_input_file(request_id, file)
     except AssertionError as exc:
         logger.error(f"File validation failed: {exc}")
         return {"message": f"FAIL (File validation error): {exc}"}
@@ -244,11 +163,9 @@ async def alert(
     pending_events[request_id] = event
 
     async for chunk in audio_file:
-        try:
-            validate_audio_chunk(request_id, chunk)
-        except AssertionError as exc:
-            logger.error(f"Chunk validation failed: {exc}")
-            return {"message": f"FAIL (Chunk validation error): {exc}"}
+        if chunk.request_id != request_id:
+            logger.error("Chunk validation failed: Chunk request ID does not match.")
+            return {"message": "FAIL (Chunk validation error): Chunk request ID does not match."}
         logger.info(f"Processing chunk {chunk.chunk_index}/{audio_file.num_chunks} for request_id: {request_id}")
         await send_to_transforms(chunk)
 
@@ -270,7 +187,7 @@ async def alert(
     return ret_json
 
 @app.post("/api/final")
-async def final(output_file: OutputAudioFile) -> JSONResponse:
+async def final(output_file: ci.OutputAudioFile) -> ci.JSONResponse:
     """
     Endpoing to receive the final fused audio file from the channel fuser and return the response to the web application.
     
@@ -280,26 +197,25 @@ async def final(output_file: OutputAudioFile) -> JSONResponse:
     Returns:
         A JSON response containing the final result message.
     """
+    try:
+        output_file.validate_contents()
+    except AssertionError as exc:
+        logger.error(f"Output file validation failed: {exc}")
+        return {
+            "status": 400,
+            "message": f"FAIL (Output file validation error): {exc}"
+        }
     
     logger.info(f"Final response received: {output_file.filename} with request_id: {output_file.request_id}")
     pending_results[output_file.request_id] = output_file
-    
-    try:
-        validate_output_file(output_file)
-        event = pending_events.get(output_file.request_id)
-        if event:
-            event.set()
-    except AssertionError as exc:
-        logger.error(f"Output validation failed: {exc}")
-        ret_json = {
-            "status": 400,
-            "message": f"FAIL (Output validation error): {exc}"
-        }
-    except KeyError:
-        logger.error(f"No pending event found for request_id: {output_file.request_id}")
-        ret_json = {
-            "status": 404,
-            "message": f"FAIL: No pending request found for request_id: {output_file.request_id}"
-        }
-        
-    return ret_json
+
+    event = pending_events.get(output_file.request_id)
+    if event:
+        event.set()
+        return {"status": 200, "message": "ACK"}
+
+    logger.error(f"No pending event found for request_id: {output_file.request_id}")
+    return {
+        "status": 404,
+        "message": f"FAIL: No pending request found for request_id: {output_file.request_id}",
+    }
