@@ -48,7 +48,6 @@ _lock = asyncio.Lock()
 _tone_predictions: Dict[str, ci.TonePrediction] = {}
 _tone_events: Dict[str, asyncio.Event] = {}
 
-
 async def get_tone_prediction(request_id: str, timeout: float = 10.0) -> ci.TonePrediction:
     async with _lock:
         event = _tone_events.get(request_id)
@@ -95,7 +94,7 @@ async def fft_channel_predictor(fft_chunk: ci.FFTChunk) -> ci.JSONResponse:
         prediction = await fft_predict_channels(fft_chunk, tone_prediction)
 
         async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.post(cc.CHANNEL_FUSER_URL, json=prediction.model_dump())
+            await client.post(cc.CHANNEL_FUSER_URL, json=prediction.model_dump(mode="json"))
 
     except AssertionError as exc:
         logger.error(f"FFT channel prediction failed for chunk: {fft_chunk.chunk_index} of request_id: {fft_chunk.request_id}: {exc}")
@@ -143,7 +142,7 @@ async def cqt_channel_predictor(cqt_chunk: ci.CQTChunk) -> ci.JSONResponse:
         prediction = await cqt_predict_channels(cqt_chunk, tone_prediction)
 
         async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.post(cc.CHANNEL_FUSER_URL, json=prediction.model_dump())
+            await client.post(cc.CHANNEL_FUSER_URL, json=prediction.model_dump(mode="json"))
 
     except AssertionError as exc:
         logger.error(f"CQT channel prediction failed for chunk: {cqt_chunk.chunk_index} of request_id: {cqt_chunk.request_id}: {exc}")
@@ -191,7 +190,7 @@ async def chroma_channel_predictor(chroma_chunk: ci.ChromaChunk) -> ci.JSONRespo
         prediction = await chroma_predict_channels(chroma_chunk, tone_prediction)
 
         async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.post(cc.CHANNEL_FUSER_URL, json=prediction.model_dump())
+            await client.post(cc.CHANNEL_FUSER_URL, json=prediction.model_dump(mode="json"))
 
     except AssertionError as exc:
         logger.error(f"Chroma channel prediction failed for chunk: {chroma_chunk.chunk_index} of request_id: {chroma_chunk.request_id}: {exc}")

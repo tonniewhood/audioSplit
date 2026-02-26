@@ -45,7 +45,7 @@ async def compute_cqt_features(chunk: ci.AudioChunk) -> ci.CQTChunk:
         CQTChunk: The computed CQT features.
     """
     # Placeholder for CQT computation logic
-    cqt_features = np.zeros(cc.MAX_CHUNK_SIZE, dtype=np.complex64)
+    cqt_features = np.zeros(cc.CHUNK_SIZE, dtype=np.complex64)
     return ci.CQTChunk(
         request_id=chunk.request_id,
         chunk_index=chunk.chunk_index,
@@ -53,7 +53,7 @@ async def compute_cqt_features(chunk: ci.AudioChunk) -> ci.CQTChunk:
         num_bins=len(cqt_features),
         bins_per_octave=12,
         f_min=32.703,
-        dtype=np.complex64,
+        dtype="complex64",
         bins=cqt_features,
     )
 
@@ -77,7 +77,7 @@ async def cqt(chunk: ci.AudioChunk) -> ci.JSONResponse:
         logger.info(f"Computed CQT features for chunk: {chunk.request_id}, forwarding to downstream services.")
 
         async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.post(cc.CHANNEL_PREDICTOR_URL, json={**cqt_chunk.model_dump(), "source": "cqt"})
+            await client.post(cc.build_predictor_url("cqt"), json=cqt_chunk.model_dump(mode="json"))
 
     except Exception as exc:
         logger.exception(f"Data Validation failed: {exc}")

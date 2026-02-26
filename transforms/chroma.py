@@ -51,7 +51,7 @@ async def compute_chroma_features(chunk: ci.AudioChunk) -> ci.ChromaChunk:
         chunk_index=chunk.chunk_index,
         total_chunks=chunk.total_chunks,
         num_pitches=len(chroma_features),
-        dtype=np.float32,
+        dtype="float32",
         pitch_classes=chroma_features,
     )
 
@@ -75,7 +75,7 @@ async def chroma(chunk: ci.AudioChunk) -> ci.JSONResponse:
         logger.info(f"Computed chroma features for chunk: {chunk.request_id}, forwarding to downstream services.")
 
         async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.post(cc.CHANNEL_PREDICTOR_URL, json={**chroma_chunk.model_dump(), "source": "chroma"})
+            await client.post(cc.build_predictor_url("chroma"), json=chroma_chunk.model_dump(mode="json"))
 
     except Exception as exc:
         logger.exception(f"Data Validation failed: {exc}")

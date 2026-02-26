@@ -82,8 +82,8 @@ async def create_input_file(request_id: str, file: UploadFile) -> ci.InputAudioF
         channels=1,
         num_samples=len(data),
         filename=file.filename,
-        num_chunks=int(np.ceil(len(data) / cc.MAX_CHUNK_SIZE)),
-        dtype=np.float32,
+        num_chunks=int(np.ceil(len(data) / cc.CHUNK_SIZE)),
+        dtype="float32",
         waveform=data,
         sample_rate=sample_rate,
     )
@@ -99,9 +99,9 @@ async def send_to_transforms(chunk: ci.AudioChunk) -> None:
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             await asyncio.gather(
-                client.post(cc.FFT_URL, json=chunk.model_dump()),
-                client.post(cc.CQT_URL, json=chunk.model_dump()),
-                client.post(cc.CHROMA_URL, json=chunk.model_dump()),
+                client.post(cc.FFT_URL, json=chunk.model_dump(mode="json")),
+                client.post(cc.CQT_URL, json=chunk.model_dump(mode="json")),
+                client.post(cc.CHROMA_URL, json=chunk.model_dump(mode="json")),
             )
     except Exception:
         logger.exception("Request failed")

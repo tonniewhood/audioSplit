@@ -24,6 +24,7 @@ Outputs:
 - Logging of processing steps and errors for observability
 """
 
+from typing import Dict
 
 import httpx
 import numpy as np
@@ -36,7 +37,7 @@ from common.logging_utils import setup_logging
 # Service objects
 app = FastAPI()
 logger = setup_logging("prediction-TONE_IDENTIFIER")
-chunk_buffer = ci.ChunkBuffer(max_chunks=cc.MAX_CHUNK_BUFFER)
+chunk_buffers: Dict[str, ci.ChunkBuffer] = {}
 
 async def build_spectrogram(chunks: ci.ChunkBuffer, request_id: str) -> ci.Spectrogram:
     """
@@ -52,12 +53,12 @@ async def build_spectrogram(chunks: ci.ChunkBuffer, request_id: str) -> ci.Spect
     
     # Placeholder implementation
     num_cols = 128 # compute based on chunk size and overlap
-    spectrogram = np.zeros((cc.MAX_CHUNK_SIZE, num_cols), dtype=np.float32)
+    spectrogram = np.zeros((cc.CHUNK_SIZE, num_cols), dtype=np.float32)
     return ci.Spectrogram(
         request_id=request_id,
-        num_bins=cc.MAX_CHUNK_SIZE,
+        num_bins=cc.CHUNK_SIZE,
         num_frames=num_cols,
-        dtype=np.float32,
+        dtype="float32",
         spectrogram=spectrogram,
         sample_rate=chunks[0].sample_rate if chunks else cc.SAMPLE_RATE,
     )
@@ -78,13 +79,23 @@ async def compute_tone_prediction(spectrogram: ci.Spectrogram) -> ci.TonePredict
     return ci.TonePrediction(
         request_id=spectrogram.request_id,
         num_classes=len(ci.SoundClassifications),
-        dtype=np.float32,
+        dtype="float32",
         class_probabilities=predicted_tones,
     )
 
 @app.post("/api/tone_identifier")
-async def tone_identifier(fft_features: ci.FFTChunk):
+async def tone_identifier(fft_features: ci.FFTChunk) -> ci.JSONResponse:
+    """
+    Identifies the predominant tones/sound classifications within a given window of audio chunks.
+    This endpoint receives FFT features, builds a spectrogram, computes tone predictions, and forwards results to the Channel Predictor.
     
+    Args:
+        fft_features (FFTChunk): The incoming FFT features containing frequency-domain information and metadata.
+        
+    Returns:
+        JSONResponse: A response indicating the status of the operation.
+    """
+    chunk_buffer = chunk_buffers.setdefault(fft_features.request_id, ci.ChunkBuffer(max_chunks=cc.MAX_CHUNK_BUFFER))
     try:
         fft_features.validate_contents()
     except AssertionError as exc:
@@ -95,7 +106,7 @@ async def tone_identifier(fft_features: ci.FFTChunk):
         }
    
     logger.info(f"Received FFT features for request_id: {fft_features.request_id}, chunk_index: {fft_features.chunk_index}")
-    chunk_buffer.append(fft_features)
+    chunk_buffer.append(fft_features.frequencies)
     
     if not chunk_buffer.saturated:
         return {
@@ -108,7 +119,7 @@ async def tone_identifier(fft_features: ci.FFTChunk):
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.post(cc.CHANNEL_PREDICTOR_URL, json=tone_prediction.model_dump())
+            await client.post(cc.build_predictor_url("tone_identifier"), json=tone_prediction.model_dump(mode="json"))
     except Exception as exc:
         logger.exception("Forwarding failed")
         return {

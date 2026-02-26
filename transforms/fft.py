@@ -47,14 +47,14 @@ async def compute_fft_features(chunk: ci.AudioChunk) -> ci.FFTChunk:
         FFTChunk: The computed FFT features.
     """
     # Placeholder for FFT computation logic
-    fft_features = np.fft.fft(chunk.waveform, n=cc.MAX_CHUNK_SIZE).astype(np.complex64)
+    fft_features = np.fft.fft(chunk.waveform, n=cc.CHUNK_SIZE).astype(np.complex64)
     return ci.FFTChunk(
         request_id=chunk.request_id,
         chunk_index=chunk.chunk_index,
         total_chunks=chunk.total_chunks,
         num_bins=len(fft_features),
-        bin_hz_resolution=chunk.sample_rate / cc.MAX_CHUNK_SIZE,
-        dtype=np.complex64,
+        bin_hz_resolution=chunk.sample_rate / cc.CHUNK_SIZE,
+        dtype="complex64",
         frequencies=fft_features,
         sample_rate=chunk.sample_rate,
     )
@@ -88,8 +88,8 @@ async def fft(chunk: ci.AudioChunk) -> ci.JSONResponse:
         
         async with httpx.AsyncClient(timeout=5.0) as client:
             await asyncio.gather(
-                client.post(cc.TONE_IDENTIFIER_URL, json=fft_chunk.model_dump()),
-                client.post(cc.CHANNEL_PREDICTOR_URL, json={**fft_chunk.model_dump(), "source": "fft"})
+                client.post(cc.TONE_IDENTIFIER_URL, json=fft_chunk.model_dump(mode="json")),
+                client.post(cc.build_predictor_url("fft"), json=fft_chunk.model_dump(mode="json"))
             )
         
     except Exception as exc:

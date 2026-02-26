@@ -31,6 +31,6 @@ async def cqt_predict_channels(
         num_classes=num_classes,
         num_samples=num_samples,
         prediction_source="cqt",
-        dtype=np.float32,
+        dtype="float32",
         predictions=predictions,
     )

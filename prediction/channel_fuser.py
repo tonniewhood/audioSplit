@@ -21,8 +21,7 @@ Outputs:
 """
 
 import asyncio
-import threading
-from typing import Dict, List
+from typing import Dict
 
 import httpx
 import numpy as np
@@ -37,10 +36,11 @@ from common.logging_utils import setup_logging
 # Service objects
 app = FastAPI()
 logger = setup_logging("prediction-CHANNEL_FUSER")
-_audio_lock = asyncio.Lock()
 _chunk_lock = asyncio.Lock()
-_channel_predictions: Dict[str, NDArray[np.float32]] = {}
+_fused_audio: Dict[str, ci.FusedAudio] = {}
 _predicted_chunks: Dict[str, Dict[int, Dict[str, ci.PredictedChunk]]] = {}
+
+SMOOTH_WINDOW = 128
 
 
 def fuse_predictions(chunk_sources: Dict[str, ci.PredictedChunk]) -> NDArray[np.float32]:
@@ -56,8 +56,29 @@ def fuse_predictions(chunk_sources: Dict[str, ci.PredictedChunk]) -> NDArray[np.
 
     # Placeholder implementation for fusion logic
     # In a real implementation, this would involve combining the predictions in a meaningful way
-    fused_predictions = np.zeros((len(ci.SoundClassifications), cc.MAX_CHUNK_SIZE), dtype=np.float32)
+    sample_len = next(iter(chunk_sources.values())).num_samples
+    fused_predictions = np.zeros((len(ci.SoundClassifications), sample_len), dtype=np.float32)
     return fused_predictions
+
+
+def smooth_predictions(predictions: NDArray[np.float32], window: int = SMOOTH_WINDOW) -> NDArray[np.float32]:
+    """
+    Apply a simple moving average smoothing to the predictions.
+    
+    Args:
+        predictions (NDArray[np.float32]): The input predictions to smooth.
+        window (int): The size of the moving average window.
+        
+    Returns:
+        NDArray[np.float32]: The smoothed predictions.
+    """
+    if window <= 1:
+        return predictions
+    kernel = np.ones(window, dtype=np.float32) / window
+    smoothed = np.zeros_like(predictions)
+    for idx in range(predictions.shape[0]):
+        smoothed[idx] = np.convolve(predictions[idx], kernel, mode="same")
+    return smoothed
 
 async def fuse_and_forward(request_id: str, chunk_sources: Dict[str, ci.PredictedChunk]) -> None:
     """
@@ -70,26 +91,57 @@ async def fuse_and_forward(request_id: str, chunk_sources: Dict[str, ci.Predicte
     """
 
     try:
-        # Verify all chunks have consistent total_chunks value
-        total_chunks_values = [chunk.total_chunks for chunk in chunk_sources.values()]
-        assert len(set(total_chunks_values)) == 1, "All chunks must have the same total_chunks value"
-        fused_chunk = fuse_predictions(chunk_sources)
-        async with _audio_lock:
-            request_predictions = _channel_predictions.setdefault(request_id, np.zeros_like(fused_chunk))
-            np.concatenate((request_predictions, fused_chunk), axis=1)
+        # Verify all chunks have consistent total_chunks value and chunk_index
+        chunk_indices = {chunk.chunk_index for chunk in chunk_sources.values()}
+        total_chunks_values = {chunk.total_chunks for chunk in chunk_sources.values()}
+        assert len(chunk_indices) == 1, "All sources must share the same chunk_index."
+        assert len(total_chunks_values) == 1, "All chunks must have the same total_chunks value."
 
-            if len(request_predictions) == total_chunks_values[0]:
+        chunk_index = next(iter(chunk_indices))
+        total_chunks = next(iter(total_chunks_values))
+        fused = fuse_predictions(chunk_sources)
+
+        fused_chunk = ci.FusedChunk(
+            request_id=request_id,
+            chunk_index=chunk_index,
+            total_chunks=total_chunks,
+            num_classes=len(ci.SoundClassifications),
+            num_samples=fused.shape[1],
+            dtype="float32",
+            predictions=fused,
+        )
+
+        async with _chunk_lock:
+            fused_audio = _fused_audio.get(request_id)
+            if fused_audio is None:
+                fused_audio = ci.FusedAudio(
+                    request_id=request_id,
+                    total_chunks=total_chunks,
+                    chunks={},
+                )
+                _fused_audio[request_id] = fused_audio
+            fused_audio.chunks[chunk_index] = fused_chunk
+
+            if len(fused_audio.chunks) == fused_audio.total_chunks:
+                ordered = [fused_audio.chunks[i].predictions for i in range(fused_audio.total_chunks)]
+                full = np.concatenate(ordered, axis=1)
+                full = smooth_predictions(full)
+
                 output_audio = ci.OutputAudioFile(
                     request_id=request_id,
+                    channels=len(ci.SoundClassifications),
+                    num_samples=full.shape[1],
+                    dtype="float32",
+                    waveform=full,
                     sample_rate=cc.SAMPLE_RATE,
-                    num_channels=len(ci.SoundClassifications),
-                    dtype=np.float32,
-                    audio_data=request_predictions,
                 )
-            
+
                 async with httpx.AsyncClient(timeout=5.0) as client:
-                    await client.post(cc.GATEWAY_URL, json=output_audio.model_dump())
-                _channel_predictions.pop(request_id, None)
+                    await client.post(cc.GATEWAY_FINAL_URL, json=output_audio.model_dump(mode="json"))
+
+                _fused_audio.pop(request_id, None)
+            else:
+                _fused_audio[request_id] = fused_audio
                 
     except Exception as exc:
         logger.error(f"Error during fusion and forwarding for request_id {request_id}: {exc}")
@@ -122,8 +174,7 @@ async def channel_fuser(predicted_chunk: ci.PredictedChunk) -> ci.JSONResponse:
         chunk_sources[predicted_chunk.prediction_source] = predicted_chunk
 
         if len(chunk_sources) == cc.NUM_PREDICTORS:
-            threading.Thread(
-                target=fuse_and_forward, args=(predicted_chunk.request_id, chunk_sources)
-            ).start()
+            asyncio.create_task(fuse_and_forward(predicted_chunk.request_id, chunk_sources))
+            request_chunks.pop(predicted_chunk.chunk_index, None)
 
     return {"status": 200, "message": "ACK"}
