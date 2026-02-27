@@ -69,13 +69,11 @@ async def compute_fft_features(chunk: ci.AudioChunk) -> ci.FFTChunk:
             frequencies=fft_features,
             sample_rate=chunk.sample_rate,
         )
+        tone_input = ci.ToneInput(fft_chunk=fft_chunk, audio_chunk=chunk)
 
-        # Forward FFT features downstream
+        # Forward FFT features downstream to tone identifier
         async with httpx.AsyncClient(timeout=cc.HTTP_TIMEOUT) as client:
-            await asyncio.gather(
-                client.post(cc.TONE_IDENTIFIER_URL, json=fft_chunk.model_dump(mode="json")),
-                client.post(cc.build_predictor_url("fft"), json=fft_chunk.model_dump(mode="json")),
-            )
+            await client.post(cc.TONE_IDENTIFIER_URL, json=tone_input.model_dump(mode="json"))
     except (httpx.ReadTimeout, httpx.ReadError, asyncio.TimeoutError):
         # Report downstream timeouts to the gateway
         logger.warning(f"FFT downstream timeout for chunk: {chunk.chunk_index} of request_id: {chunk.request_id}")

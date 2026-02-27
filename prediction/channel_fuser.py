@@ -59,7 +59,9 @@ def fuse_predictions(chunk_sources: Dict[str, ci.PredictedChunk]) -> NDArray[np.
     # Placeholder implementation for fusion logic
     sample_len = next(iter(chunk_sources.values())).num_samples
     fused_predictions = np.zeros((len(ci.SoundClassifications), sample_len), dtype=np.float32)
-    return fused_predictions
+    return (
+        chunk_sources["fft"].predictions if "fft" in chunk_sources else fused_predictions
+    )  # For testing, use FFT predictions if available, otherwise return zeros
 
 
 def smooth_predictions(predictions: NDArray[np.float32], window: int = SMOOTH_WINDOW) -> NDArray[np.float32]:

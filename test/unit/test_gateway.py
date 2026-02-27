@@ -26,7 +26,7 @@ class TestGatewayAlert:
 
     def test_valid_upload_fans_out(self, client: TestClient) -> None:
         """
-        Verify that a valid WAV upload is accepted and fanned out to all transforms.
+        Verify that a valid WAV upload is accepted and fanned out to FFT and temporal predictor.
         """
         request_id = "req-2048"
 
@@ -40,8 +40,8 @@ class TestGatewayAlert:
         assert resp.status_code == 200
         body = resp.json()
         assert "message" in body
-        # Should fan out to FFT, CQT, Temporal
-        assert mock_post.call_count == 6  # 3 transforms on a 2-chunk file
+        # Should fan out to FFT and Temporal
+        assert mock_post.call_count == 2  # 2 targets on a 1-chunk file
 
     def test_invalid_sampling_frequency(self, client: TestClient) -> None:
         """

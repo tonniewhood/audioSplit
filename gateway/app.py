@@ -2,7 +2,7 @@
 Primary application for the "Gateway" Service in the audio processing pipeline.
 This is the primary contact point for the web application and is responsible for:
 - Receiving audio file uploads from the web application.
-- Chunking the audio file into 1024-sample segments (if necessary/possible).
+- Chunking the audio file into CHUNK_SIZE segments (if necessary/possible).
 - Forwarding the audio chunks to the transform services (FFT, CQT) and temporal predictor.
 - Awaiting the results from the channel fuser and returning the final response to the web application.
 
@@ -13,7 +13,7 @@ Uses `InputFile` dataclass for the incoming file
 
 Boundary: ** (Internal) **
 Uses `InputAudioFile` to convert and validate the input audio file
-Uses `AudioChunk` dataclass to split the audio file into 1024-sample segments (if necessary/possible)
+Uses `AudioChunk` dataclass to split the audio file into CHUNK_SIZE segments (if necessary/possible)
 
 Boundary: ** Gateway -> Transforms (FFT, CQT) / Temporal Predictor **
 Uses `FFTChunk`, `CQTChunk`, and `AudioChunk` dataclasses for the outgoing audio chunks (depending on the target)
@@ -110,7 +110,7 @@ async def create_input_file(request_id: str, file: UploadFile) -> ci.InputAudioF
 
 async def send_to_transforms(chunk: ci.AudioChunk) -> bool:
     """
-    Sends the initial payload to each of the transform services (FFT, CQT) and the temporal predictor.
+    Sends the initial payload to the FFT transform and temporal predictor.
 
     Args:
         chunk (AudioChunk): The audio chunk to be processed.
@@ -122,7 +122,6 @@ async def send_to_transforms(chunk: ci.AudioChunk) -> bool:
         async with httpx.AsyncClient(timeout=cc.HTTP_TIMEOUT) as client:
             await asyncio.gather(
                 client.post(cc.FFT_URL, json=chunk.model_dump(mode="json")),
-                client.post(cc.CQT_URL, json=chunk.model_dump(mode="json")),
                 client.post(cc.build_predictor_url("temporal"), json=chunk.model_dump(mode="json")),
             )
     except (httpx.ReadTimeout, httpx.ReadError):

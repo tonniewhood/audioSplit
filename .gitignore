@@ -84,3 +84,6 @@ Thumbs.db
 
 # Results from processing
 */results/
+
+# Ignore model files
+models/*

@@ -12,11 +12,15 @@ dependencies = [
     "uvicorn[standard]>=0.29",
     "httpx>=0.27",
     "pydantic>=2.0",
+    "matplotlib>=3.7.0",
     "numpydantic>=1.7.0",
     "numpy>=1.26.0",
     "librosa>=0.10",
     "jinja2>=3.1",
     "python-multipart>=0.0.9",
+    "torch>=2.7.0",
+    "torchaudio>=2.7.0",
+    "transformers>=5.2.0",
 ]
 
 [project.optional-dependencies]

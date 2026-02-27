@@ -39,10 +39,9 @@ class SoundClassifications(Enum):
     """Represents the sound classificiations that are current supported"""
 
     VOCAL = 0
-    GUITAR = 1
-    BASS = 2
-    DRUMS = 3
-    PIANO = 4
+    BASS = 1
+    DRUMS = 2
+    OTHER = 3
 
 
 # Contract Dataclasses
@@ -207,7 +206,7 @@ class AudioChunk(BaseModel):
         - Sample rate must be 44.1kHz
         - Bit depth must be 32-bit
         - Channels must be mono
-        - Sample count must be <= 1024
+        - Sample count must be <= CHUNK_SIZE
         - Chunk index must be non-negative
 
     Data Fields:
@@ -228,7 +227,7 @@ class AudioChunk(BaseModel):
     total_chunks: int
     sample_rate: int
     dtype: Literal["float32"]
-    waveform: NDArray[Shape["1024"], np.float32]  # type: ignore[reportInvalidTypeForm]
+    waveform: NDArray[Shape[f"{cc.CHUNK_SIZE}"], np.float32]  # type: ignore[reportInvalidTypeForm]
     version: Literal["audio_chunk_v1"] = "audio_chunk_v1"
 
     @field_validator("waveform", mode="before")
@@ -268,14 +267,14 @@ class FFTChunk(BaseModel):
     Version: fft_chunk_v1
 
     Constraints:
-        - Array must have length 1024
+        - Array must have length CHUNK_SIZE
         - dtype must be complex64
 
     Data Fields:
         - request_id (str): Unique identifier for the request
         - chunk_index (int): Index of the chunk within the audio file
         - total_chunks (int): Total number of chunks the audio file is split into
-        - num_bins (int): Number of frequency bins in the FFT output (must be 1024)
+        - num_bins (int): Number of frequency bins in the FFT output (must be CHUNK_SIZE)
         - bin_hz_resolution (float): Frequency resolution of each bin in Hz
         - valid_chunk (bool): Whether the chunk contains valid audio data and can be used for prediction/fusing
         - dtype (np.complex64): Data type of the FFT output (must be complex64)
@@ -328,7 +327,7 @@ class CQTChunk(BaseModel):
     Version: cqt_chunk_v1
 
     Constraints:
-        - Array must have length 1024
+        - Array must have length CHUNK_SIZE
         - dtype must be complex64
 
     Data Fields:
@@ -441,6 +440,36 @@ class MelSpectrogram(BaseModel):
         assert self.sample_rate == cc.SAMPLE_RATE, f"Sample rate must be {cc.SAMPLE_RATE} Hz."
 
 
+class ToneInput(BaseModel):
+    """
+    Represents the combined payload for tone identification.
+
+    Boundary: Transforms[FFT] + Temporal -> Tone Identifier
+    Version: tone_input_v1
+
+    Data Fields:
+        - fft_chunk (FFTChunk): Frequency-domain features for the chunk
+        - audio_chunk (AudioChunk): Raw audio chunk samples
+    """
+
+    fft_chunk: FFTChunk
+    audio_chunk: AudioChunk
+    version: Literal["tone_input_v1"] = "tone_input_v1"
+
+    @model_validator(mode="after")
+    def validate_tone_input(self):
+        # Validate inner payloads first
+        self.fft_chunk.validate_contents()
+        self.audio_chunk.validate_contents()
+
+        # Ensure the two chunks describe the same window
+        assert self.fft_chunk.request_id == self.audio_chunk.request_id, "request_id mismatch in ToneInput."
+        assert self.fft_chunk.chunk_index == self.audio_chunk.chunk_index, "chunk_index mismatch in ToneInput."
+        assert self.fft_chunk.total_chunks == self.audio_chunk.total_chunks, "total_chunks mismatch in ToneInput."
+        assert self.fft_chunk.sample_rate == self.audio_chunk.sample_rate, "sample_rate mismatch in ToneInput."
+        return self
+
+
 class TonePrediction(BaseModel):
     """
     Represents a prediction of what tones are present in a chunk of audio data. The tone prediction SHALL adhere to the following specifications:
@@ -503,7 +532,7 @@ class PredictedChunk(BaseModel):
     Constraints:
         - Array must be 2D with shape (num_classes, num_samples)
         - dtype must be float32
-        - num_samples must be <= 1024
+        - num_samples must be <= CHUNK_SIZE
         - num_classes must be equal to the number of SoundClassifications (currently 5)
 
     Data Fields:
@@ -511,7 +540,7 @@ class PredictedChunk(BaseModel):
         - chunk_index (int): Index of the chunk within the audio file
         - total_chunks (int): Total number of chunks the audio file is split into
         - num_classes (int): Number of sound classifications (must be 5)
-        - num_samples (int): Number of samples in the predicted chunk (must be <= 1024)
+        - num_samples (int): Number of samples in the predicted chunk (must be <= CHUNK_SIZE)
         - prediction_source (str): The source of the prediction (e.g., "fft", "cqt", "temporal")
         - dtype (np.float32): Data type of the predicted chunk (must be float32)
         - predictions (np.ndarray): 2D array containing the predicted values for each sound classification and sample
@@ -709,7 +738,8 @@ class ChunkBuffer:
             return np.empty((0, 0), dtype=np.float32)
         arr = np.concatenate(list(self.buffer), axis=0)
         if len(arr) < self.max_chunks * cc.CHUNK_SIZE:
-            padding = np.zeros(self.max_chunks * cc.CHUNK_SIZE - len(arr), dtype=np.float32)
+            pad_len = self.max_chunks * cc.CHUNK_SIZE - len(arr)
+            padding = np.zeros(pad_len, dtype=np.float32)
             arr = np.concatenate((arr, padding), axis=0)
 
         return arr

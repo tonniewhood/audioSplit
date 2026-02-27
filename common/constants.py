@@ -7,7 +7,7 @@ Grouped by purpose for easy discovery.
 MAX_STR_LEN = 255
 NUM_PITCH_CLASSES = 12
 MAX_INPUT_BYTES = 10 * 1024 * 1024
-CHUNK_SIZE = 1024
+CHUNK_SIZE = 4096
 MAX_CHUNK_BUFFER_SIZE = 8
 SPEC_OVERLAP = 256
 SPEC_FRAMES = 1 + (MAX_CHUNK_BUFFER_SIZE * CHUNK_SIZE - CHUNK_SIZE) // (CHUNK_SIZE - SPEC_OVERLAP)
@@ -18,7 +18,7 @@ MEL_HOP_LENGTH = CHUNK_SIZE - SPEC_OVERLAP
 SAMPLE_RATE = 44100
 
 # Prediction info
-NUM_PREDICTORS = 3
+NUM_PREDICTORS = 1
 
 # Gateway timing
 FUSER_TIMEOUT = 3.0
@@ -26,6 +26,11 @@ FUSER_TIMEOUT = 3.0
 # HTTP client timeouts
 HTTP_TIMEOUT = 20.0
 HTTP_ERROR_TIMEOUT = 10.0
+
+# Model configuration
+AST_MODEL_ID = "MIT/ast-finetuned-audioset-10-10-0.4593"
+AST_CACHE_DIR = "models"
+UNMIX_CACHE_DIR = "models"
 
 # Upload constraints
 ALLOWED_CONTENT_TYPES = {"audio/wav", "audio/mp3"}
