@@ -34,7 +34,12 @@ async function showAlert() {
     }
 
     const data = await response.json();
-    alert(data.message);
+    if (data.status !== 200) {
+        alert("Server error: " + data.message);
+        return;
+    }
+
+    await pollForResult(requestId);
 }
 
 function updateSelectedFile(file) {
@@ -72,6 +77,50 @@ dropzone.addEventListener("drop", (event) => {
 });
 
 sendBtn.addEventListener("click", showAlert);
+
+async function pollForResult(requestId) {
+    const statusUrl = `/api/status/${requestId}`;
+    const resultUrl = `/api/result/${requestId}`;
+
+    while (true) {
+        const res = await fetch(statusUrl);
+        if (res.status === 200) {
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+            continue;
+        }
+
+        if (res.status === 201) {
+            const fileRes = await fetch(resultUrl);
+            if (!fileRes.ok) {
+                alert("Failed to download result.");
+                return;
+            }
+            const blob = await fileRes.blob();
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = `${requestId}.wav`;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            URL.revokeObjectURL(url);
+            return;
+        }
+
+        let errorMsg = "Processing failed.";
+        try {
+            const errorData = await res.json();
+            if (errorData.message) {
+                errorMsg += " Server message: " + errorData.message;
+            }
+        } catch (e) {
+                // Ignore JSON parsing errors
+        }
+
+        alert(errorMsg);
+        return;
+    }
+}
 clearBtn.addEventListener("click", (event) => {
     event.stopPropagation();
     fileInput.value = "";

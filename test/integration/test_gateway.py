@@ -29,4 +29,24 @@ def test_gateway_accepts_upload_and_fans_out(client):
     body = resp.json()
     assert "message" in body
     # Should fan out to FFT, CQT, Chroma
-    assert mock_post.call_count == 6 # 3 transforms on a 2-chunk file
+    assert mock_post.call_count == 6  # 3 transforms on a 2-chunk file
+
+
+class TestGetPage:
+    """
+    Sanity check to make sure we're getting the expected HTML page from the root endpoint.
+
+    Tests:
+        - test_get_root_page: Verify that a GET request to the root endpoint returns a 200 status code and contains expected content.
+    """
+
+    def test_get_root_page(self, client: TestClient):
+        """
+        Verify that a GET request to the root endpoint returns a 200 status code and contains expected content.
+
+        Args:
+            client (TestClient): The test client fixture for making requests to the FastAPI app.
+        """
+        response = client.get("/")
+        assert response.status_code == 200
+        assert "AudioSplit Gateway" in response.text

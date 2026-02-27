@@ -21,9 +21,14 @@ async def fft_predict_channels(
     Returns:
         PredictedChunk: The predicted channel information for the given chunk.
     """
+    # Derive prediction dimensions from inputs
     num_classes = len(ci.SoundClassifications)
     num_samples = fft_chunk.num_bins
+
+    # Placeholder prediction output
     predictions = np.random.rand(num_classes, num_samples).astype(np.float32)
+
+    # Package the prediction for downstream consumption
     return ci.PredictedChunk(
         request_id=fft_chunk.request_id,
         chunk_index=fft_chunk.chunk_index,
@@ -33,4 +38,5 @@ async def fft_predict_channels(
         prediction_source="fft",
         dtype="float32",
         predictions=predictions,
+        chunk_valid=getattr(fft_chunk, "chunk_valid", True),
     )

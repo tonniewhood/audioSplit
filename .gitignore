@@ -82,3 +82,5 @@ Thumbs.db
 */temp/
 */.tmp
 
+# Results from processing
+*/results/

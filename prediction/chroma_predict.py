@@ -21,9 +21,14 @@ async def chroma_predict_channels(
     Returns:
         PredictedChunk: The predicted channel information for the given chunk.
     """
+    # Derive prediction dimensions from inputs
     num_classes = len(ci.SoundClassifications)
-    num_samples = chroma_chunk.num_pitches
+    num_samples = chroma_chunk.num_chroma
+
+    # Placeholder prediction output
     predictions = np.random.rand(num_classes, num_samples).astype(np.float32)
+
+    # Package the prediction for downstream consumption
     return ci.PredictedChunk(
         request_id=chroma_chunk.request_id,
         chunk_index=chroma_chunk.chunk_index,
@@ -33,4 +38,5 @@ async def chroma_predict_channels(
         prediction_source="chroma",
         dtype="float32",
         predictions=predictions,
+        chunk_valid=getattr(chroma_chunk, "chunk_valid", True),
     )

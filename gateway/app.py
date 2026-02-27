@@ -43,8 +43,10 @@ from typing import Dict
 
 import httpx
 import numpy as np
+import wave
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import common.constants as cc
 import common.interfaces as ci
@@ -55,12 +57,26 @@ from librosa import load as librosa_load
 # Constants
 BASE_DIR = Path(__file__).resolve().parent
 INDEX_HTML = BASE_DIR / "static" / "index.html"
+RESULT_DIR = BASE_DIR / "results"
 
 # Service objects
 app = FastAPI()
 logger = setup_logging("gateway")
 pending_events: Dict[str, asyncio.Event] = {}
 pending_results: Dict[str, ci.OutputAudioFile] = {}
+request_status: Dict[str, str] = {}
+request_errors: Dict[str, str] = {}
+result_paths: Dict[str, Path] = {}
+_cancelled_requests: set[str] = set()
+
+CANCEL_URLS = [
+    cc.FFT_CANCEL_URL,
+    cc.CQT_CANCEL_URL,
+    cc.CHROMA_CANCEL_URL,
+    cc.TONE_IDENTIFIER_CANCEL_URL,
+    cc.CHANNEL_PREDICTOR_CANCEL_URL,
+    cc.CHANNEL_FUSER_CANCEL_URL,
+]
 
 # Mount static files
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
@@ -89,24 +105,33 @@ async def create_input_file(request_id: str, file: UploadFile) -> ci.InputAudioF
     )
 
 
-async def send_to_transforms(chunk: ci.AudioChunk) -> None:
+async def send_to_transforms(chunk: ci.AudioChunk) -> bool:
     """
     Sends the initial payload to each of the transform services (FFT, CQT, Chroma).
     
     Args:
         chunk (AudioChunk): The audio chunk to be processed.
+        
+    Returns:
+        bool: True if the operation was successful, False otherwise.
     """
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=cc.HTTP_TIMEOUT) as client:
             await asyncio.gather(
                 client.post(cc.FFT_URL, json=chunk.model_dump(mode="json")),
                 client.post(cc.CQT_URL, json=chunk.model_dump(mode="json")),
                 client.post(cc.CHROMA_URL, json=chunk.model_dump(mode="json")),
             )
+    except (httpx.ReadTimeout, httpx.ReadError):
+        logger.warning(f"Downstream timeout for chunk: {chunk.chunk_index} of request_id: {chunk.request_id}")
+        return False
     except Exception:
         logger.exception("Request failed")
         pending_events.pop(chunk.request_id, None)
         pending_results.pop(chunk.request_id, None)
+        return False
+        
+    return True
 
 async def await_fuser(request_id: str, timeout: float = cc.FUSER_TIMEOUT) -> ci.OutputAudioFile | None:
     """
@@ -139,7 +164,7 @@ async def root():
 async def alert(
     request_id: str = Form(...),
     file: UploadFile = File(...),
-) -> ci.JSONResponse:
+) -> JSONResponse:
     """
     Endpoint to receive the uploaded audio file from the web application, validate it, chunk it, and forward the chunks to the transform services.
     
@@ -157,37 +182,37 @@ async def alert(
         audio_file = await create_input_file(request_id, file)
     except AssertionError as exc:
         logger.error(f"File validation failed: {exc}")
-        return {"message": f"FAIL (File validation error): {exc}"}
+        return JSONResponse(
+            status_code=400,
+            content={"status": 400, "message": f"Failed to validate file. {exc}"},
+        )
 
-    event = asyncio.Event()
-    pending_events[request_id] = event
+    request_status[request_id] = "pending"
 
     async for chunk in audio_file:
+        if request_id in _cancelled_requests or request_status.get(request_id) == "error":
+            logger.warning(f"Stopping processing for request_id: {request_id} due to error/cancel")
+            return JSONResponse(
+                status_code=409,
+                content={"status": 409, "message": "CANCELLED"},
+            )
         if chunk.request_id != request_id:
             logger.error("Chunk validation failed: Chunk request ID does not match.")
-            return {"message": "FAIL (Chunk validation error): Chunk request ID does not match."}
+            return JSONResponse(
+                status_code=500,
+                content={"status": 500, "message": "Internal service error"},
+            )
         logger.info(f"Processing chunk {chunk.chunk_index}/{audio_file.num_chunks} for request_id: {request_id}")
-        await send_to_transforms(chunk)
+        if not await send_to_transforms(chunk):
+            return JSONResponse(
+                status_code=504,
+                content={"status": 504, "message": "Internal service error"},
+            )
 
-    result = await await_fuser(request_id)
-    if result is None:
-        logger.error(f"Channel fuser did not respond within timeout for request_id: {request_id}")
-        ret_json = {
-            "status": 504,
-            "message": "FAIL: Channel fuser timeout."
-        }
-    else:
-        logger.info(f"Received final result from channel fuser for request_id: {request_id}")
-        ret_json = {
-            "status": 200,
-            "message": result.model_dump_json()
-        }
-    
-    pending_events.pop(request_id, None)
-    return ret_json
+    return JSONResponse(status_code=200, content={"status": 200, "request_id": request_id})
 
 @app.post("/api/final")
-async def final(output_file: ci.OutputAudioFile) -> ci.JSONResponse:
+async def final(output_file: ci.OutputAudioFile) -> JSONResponse:
     """
     Endpoing to receive the final fused audio file from the channel fuser and return the response to the web application.
     
@@ -201,21 +226,76 @@ async def final(output_file: ci.OutputAudioFile) -> ci.JSONResponse:
         output_file.validate_contents()
     except AssertionError as exc:
         logger.error(f"Output file validation failed: {exc}")
-        return {
-            "status": 400,
-            "message": f"FAIL (Output file validation error): {exc}"
-        }
+        return JSONResponse(
+            status_code=400,
+            content={"status": 400, "message": f"FAIL (Output file validation error): {exc}"},
+        )
     
-    logger.info(f"Final response received: {output_file.filename} with request_id: {output_file.request_id}")
+    logger.info(f"Final response received with request_id: {output_file.request_id}")
     pending_results[output_file.request_id] = output_file
 
-    event = pending_events.get(output_file.request_id)
-    if event:
-        event.set()
-        return {"status": 200, "message": "ACK"}
+    RESULT_DIR.mkdir(exist_ok=True)
+    out_path = RESULT_DIR / f"{output_file.request_id}.wav"
 
-    logger.error(f"No pending event found for request_id: {output_file.request_id}")
-    return {
-        "status": 404,
-        "message": f"FAIL: No pending request found for request_id: {output_file.request_id}",
-    }
+    waveform = output_file.waveform
+    if waveform.ndim == 1:
+        samples = waveform
+        channels = 1
+    else:
+        channels = output_file.channels
+        samples = waveform.T.reshape(-1)
+
+    samples = np.clip(samples, -1.0, 1.0)
+    pcm16 = (samples * 32767.0).astype(np.int16)
+
+    with wave.open(str(out_path), "wb") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(2)
+        wf.setframerate(cc.SAMPLE_RATE)
+        wf.writeframes(pcm16.tobytes())
+
+    result_paths[output_file.request_id] = out_path
+    request_status[output_file.request_id] = "done"
+
+    return JSONResponse(status_code=200, content={"status": 200, "message": "ACK; Final result received"})
+
+
+@app.post("/api/error")
+async def error(payload: ci.ErrorPayload) -> JSONResponse:
+    request_errors[payload.request_id] = f"{payload.source}: {payload.message}"
+    request_status[payload.request_id] = "error"
+    _cancelled_requests.add(payload.request_id)
+    try:
+        async with httpx.AsyncClient(timeout=cc.HTTP_ERROR_TIMEOUT) as client:
+            await asyncio.gather(
+                *[
+                    client.post(f"{url}/{payload.request_id}")
+                    for url in CANCEL_URLS
+                ],
+                return_exceptions=True,
+            )
+    except httpx.ReadTimeout:
+        logger.warning(f"Cancel broadcast timeout for request_id {payload.request_id}")
+    except Exception:
+        logger.exception("Failed to broadcast cancel requests")
+    return JSONResponse(status_code=200, content={"status": 200, "message": "ACK"})
+
+
+@app.get("/api/status/{request_id}")
+async def status(request_id: str):
+    status = request_status.get(request_id)
+    if status == "pending":
+        return JSONResponse(status_code=200, content={"status": "pending"})
+    if status == "done":
+        return JSONResponse(status_code=201, content={"status": "done"})
+    if status == "error":
+        return JSONResponse(status_code=500, content={"status": "error", "message": "internal service error"})
+    return JSONResponse(status_code=404, content={"status": "unknown request id"})
+
+
+@app.get("/api/result/{request_id}")
+async def result(request_id: str):
+    path = result_paths.get(request_id)
+    if not path or not path.exists():
+        return JSONResponse(status_code=404, content={"status": "not_found"})
+    return FileResponse(path, media_type="audio/wav", filename=path.name)
