@@ -2,7 +2,7 @@
 Tone Identifier service for the audio processing pipeline.
 This service is responsible for:
 - Receiving frequency-domain features from the transform services.
-- Building a `Spectrogram` representation for tone analysis.
+- Building a `MelSpectrogram` representation for tone analysis.
 - Producing `TonePrediction` outputs for downstream services.
 
 The Tone Identifier service adheres to the following Contract:
@@ -11,7 +11,7 @@ Boundary: ** Transforms[FFT] -> Tone Identifier **
 Uses `FFTChunk` dataclass for incoming features
 
 Boundary: ** (Internal) **
-Uses `Spectrogram` dataclass for internal tone analysis
+Uses `MelSpectrogram` dataclass for internal tone analysis
 
 Boundary: ** Tone Identifier -> Channel Predictor **
 Uses `TonePrediction` dataclass for outgoing predictions
@@ -27,10 +27,12 @@ import asyncio
 from typing import Dict
 
 import httpx
+import librosa
 import numpy as np
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from numpy.typing import NDArray
+from pydantic import ValidationError
 
 import common.constants as cc
 import common.interfaces as ci
@@ -43,9 +45,9 @@ chunk_buffers: Dict[str, ci.ChunkBuffer] = {}
 _cancelled: set[str] = set()
 
 
-async def build_spectrogram(samples: NDArray[np.float32], sample_rate: int, request_id: str) -> ci.Spectrogram:
+async def build_mel_spectrogram(samples: NDArray[np.float32], sample_rate: int, request_id: str) -> ci.MelSpectrogram:
     """
-    Build a Spectrogram representation from a list of FFTChunks.
+    Build a mel spectrogram representation from a block of samples.
 
     Args:
         samples (NDArray[np.float32]): The buffer containing FFTChunks to process.
@@ -53,34 +55,40 @@ async def build_spectrogram(samples: NDArray[np.float32], sample_rate: int, requ
         request_id (str): The unique identifier for the current request.
 
     Returns:
-        Spectrogram: The constructed spectrogram for tone analysis.
+        MelSpectrogram: The constructed mel spectrogram for tone analysis.
     """
-    # Placeholder implementation
-    total_samples = len(samples)
-    hop = cc.CHUNK_SIZE - cc.SPEC_OVERLAP
-    if total_samples < cc.CHUNK_SIZE:
-        num_cols = 1
-    else:
-        num_cols = 1 + (total_samples - cc.CHUNK_SIZE) // hop
+    # Ensure we feed librosa a 1D float signal
+    signal = np.asarray(samples)
+    if signal.ndim > 1:
+        signal = signal.reshape(-1)
+    signal = np.abs(signal).astype(np.float32)
 
-    # Build a dummy spectrogram for now
-    spectrogram = np.zeros((cc.CHUNK_SIZE, num_cols), dtype=np.float32)
-    return ci.Spectrogram(
+    mel = librosa.feature.melspectrogram(
+        y=signal,
+        sr=sample_rate,
+        n_fft=cc.CHUNK_SIZE,
+        hop_length=cc.MEL_HOP_LENGTH,
+        n_mels=cc.MEL_N_MELS,
+        fmin=0.0,
+    ).astype(np.float32)
+
+    return ci.MelSpectrogram(
         request_id=request_id,
-        num_bins=cc.CHUNK_SIZE,
-        num_frames=num_cols,
+        num_mels=cc.MEL_N_MELS,
+        num_frames=mel.shape[1],
+        hop_length=cc.MEL_HOP_LENGTH,
         dtype="float32",
-        spectrogram=spectrogram,
+        mel_spectrogram=mel,
         sample_rate=sample_rate,
     )
 
 
-async def compute_tone_prediction(spectrogram: ci.Spectrogram) -> ci.TonePrediction:
+async def compute_tone_prediction(mel_spectrogram: ci.MelSpectrogram) -> ci.TonePrediction:
     """
-    Compute a TonePrediction from the given Spectrogram.
+    Compute a TonePrediction from the given mel spectrogram.
 
     Args:
-        spectrogram (Spectrogram): The spectrogram to analyze.
+        mel_spectrogram (MelSpectrogram): The mel spectrogram to analyze.
 
     Returns:
         TonePrediction: The predicted tone information for the audio chunk.
@@ -88,7 +96,7 @@ async def compute_tone_prediction(spectrogram: ci.Spectrogram) -> ci.TonePredict
     # Placeholder implementation
     predicted_tones = np.zeros((len(ci.SoundClassifications), 2), dtype=np.float32)  # pitch, confidence
     return ci.TonePrediction(
-        request_id=spectrogram.request_id,
+        request_id=mel_spectrogram.request_id,
         num_classes=len(ci.SoundClassifications),
         dtype="float32",
         class_probabilities=predicted_tones,
@@ -99,7 +107,7 @@ async def compute_tone_prediction(spectrogram: ci.Spectrogram) -> ci.TonePredict
 async def tone_identifier(fft_features: ci.FFTChunk) -> JSONResponse:
     """
     Identifies the predominant tones/sound classifications within a given window of audio chunks.
-    This endpoint receives FFT features, builds a spectrogram, computes tone predictions, and forwards results to the Channel Predictor.
+    This endpoint receives FFT features, builds a mel spectrogram, computes tone predictions, and forwards results to the Channel Predictor.
 
     Args:
         fft_features (FFTChunk): The incoming FFT features containing frequency-domain information and metadata.
@@ -115,7 +123,7 @@ async def tone_identifier(fft_features: ci.FFTChunk) -> JSONResponse:
     try:
         # Validate incoming payload
         fft_features.validate_contents()
-    except AssertionError as exc:
+    except (AssertionError, ValidationError) as exc:
         # Validation errors are client errors
         logger.exception(f"Data Validation failed: {exc}")
         return JSONResponse(
@@ -156,23 +164,23 @@ async def tone_identifier(fft_features: ci.FFTChunk) -> JSONResponse:
     return JSONResponse(status_code=200, content={"status": 200, "message": "ACK; Tone pipeline started"})
 
 
-async def _run_tone_pipeline(request_id: str, chunk_buffer: ci.ChunkBuffer, sample_rate: int) -> None:
+async def _run_tone_pipeline(request_id: str, samples: NDArray[np.float32], sample_rate: int) -> None:
     """
-    Build a spectrogram and generate a tone prediction for a buffered window.
+    Build a mel spectrogram and generate a tone prediction for a buffered window.
 
     Args:
         request_id (str): The unique identifier for the request.
-        chunk_buffer (ChunkBuffer): The buffered FFT feature window.
+        samples (NDArray[np.float32]): The buffered FFT feature window.
         sample_rate (int): The sample rate of the audio.
     """
     try:
-        # Build the spectrogram for this window of audio
-        logger.info(f"Building spectrogram for request_id: {request_id}")
-        spectrogram = await build_spectrogram(chunk_buffer, sample_rate, request_id)
-        logger.info(f"Spectrogram ready for request_id: {request_id}")
+        # Build the mel spectrogram for this window of audio
+        logger.info(f"Building mel spectrogram for request_id: {request_id}")
+        mel_spectrogram = await build_mel_spectrogram(samples, sample_rate, request_id)
+        logger.info(f"Mel spectrogram ready for request_id: {request_id}")
 
-        # Generate a tone prediction from the spectrogram
-        tone_prediction = await compute_tone_prediction(spectrogram)
+        # Generate a tone prediction from the mel spectrogram
+        tone_prediction = await compute_tone_prediction(mel_spectrogram)
         logger.info(f"Tone prediction computed for request_id: {request_id}")
 
         # Forward the prediction to the channel predictor

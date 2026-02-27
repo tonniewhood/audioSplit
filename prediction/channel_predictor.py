@@ -8,8 +8,8 @@ This service is responsible for:
 
 The Channel Predictor service adheres to the following Contract:
 
-Boundary: ** Transforms[FFT|CQT|Chroma] -> Channel Predictor **
-Uses `FFTChunk`, `CQTChunk`, and `ChromaChunk` dataclasses for incoming features
+Boundary: ** Transforms[FFT|CQT] / Temporal -> Channel Predictor **
+Uses `FFTChunk`, `CQTChunk`, and `AudioChunk` dataclasses for incoming features
 
 Boundary: ** Tone Identifier -> Channel Predictor **
 Uses `TonePrediction` dataclass for incoming tone predictions
@@ -18,7 +18,7 @@ Boundary: ** Channel Predictor -> Channel Fuser **
 Uses `PredictedChunk` dataclass for outgoing predictions
 
 Inputs:
-- `FFTChunk`, `CQTChunk`, and `ChromaChunk` dataclasses for incoming features
+- `FFTChunk`, `CQTChunk`, and `AudioChunk` dataclasses for incoming features
 - `TonePrediction` dataclass for incoming tone predictions
 Outputs:
 - `PredictedChunk` dataclasses for outgoing predictions (should be 3 per chunk, one for each transform)
@@ -33,15 +33,16 @@ import httpx
 import numpy as np
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
 import common.constants as cc
 import common.interfaces as ci
 from common.logging_utils import setup_logging
 from prediction.fft_predict import fft_predict_channels
 from prediction.cqt_predict import cqt_predict_channels
-from prediction.chroma_predict import chroma_predict_channels
+from prediction.temporal_predict import temporal_predict_channels
 
-EXPECTED_SOURCES = {"fft", "cqt", "chroma", "tone_identifier"}
+EXPECTED_SOURCES = {"fft", "cqt", "temporal", "tone_identifier"}
 
 # Service objects
 app = FastAPI()
@@ -117,7 +118,7 @@ async def _process_fft_prediction(fft_chunk: ci.FFTChunk) -> None:
         async with httpx.AsyncClient(timeout=cc.HTTP_TIMEOUT) as client:
             await client.post(cc.CHANNEL_FUSER_URL, json=prediction.model_dump(mode="json"))
 
-    except AssertionError as exc:
+    except (AssertionError, ValidationError) as exc:
         # Validation errors indicate malformed payloads or outputs
         logger.error(f"FFT channel prediction failed for chunk: {fft_chunk.chunk_index} of request_id: {fft_chunk.request_id}: {exc}")
         await _report_error(fft_chunk.request_id, "channel_predictor", f"FFT validation error: {exc}")
@@ -151,7 +152,7 @@ async def _process_cqt_prediction(cqt_chunk: ci.CQTChunk) -> None:
         async with httpx.AsyncClient(timeout=cc.HTTP_TIMEOUT) as client:
             await client.post(cc.CHANNEL_FUSER_URL, json=prediction.model_dump(mode="json"))
 
-    except AssertionError as exc:
+    except (AssertionError, ValidationError) as exc:
         # Validation errors indicate malformed payloads or outputs
         logger.error(f"CQT channel prediction failed for chunk: {cqt_chunk.chunk_index} of request_id: {cqt_chunk.request_id}: {exc}")
         await _report_error(cqt_chunk.request_id, "channel_predictor", f"CQT validation error: {exc}")
@@ -164,39 +165,47 @@ async def _process_cqt_prediction(cqt_chunk: ci.CQTChunk) -> None:
         logger.exception(f"CQT channel prediction failed for chunk: {cqt_chunk.chunk_index} of request_id: {cqt_chunk.request_id}: {exc}")
         await _report_error(cqt_chunk.request_id, "channel_predictor", f"CQT processing error: {exc}")
 
-async def _process_chroma_prediction(chroma_chunk: ci.ChromaChunk) -> None:
+async def _process_temporal_prediction(audio_chunk: ci.AudioChunk) -> None:
     """
-    Run chroma-based prediction for a chunk and forward results to the fuser.
+    Run temporal prediction for a raw audio chunk and forward results to the fuser.
 
     Args:
-        chroma_chunk (ChromaChunk): The chroma features for the current chunk.
+        audio_chunk (AudioChunk): The raw audio chunk for the current window.
     """
-    if chroma_chunk.request_id in _cancelled:
+    if audio_chunk.request_id in _cancelled:
         return
     try:
         # Resolve the active tone prediction for this request
-        tone_prediction = await _get_or_init_tone_prediction(chroma_chunk.request_id)
+        tone_prediction = await _get_or_init_tone_prediction(audio_chunk.request_id)
         tone_prediction.validate_contents()
 
-        # Run the chroma-specific predictor
-        prediction = await chroma_predict_channels(chroma_chunk, tone_prediction)
+        # Run the temporal predictor
+        prediction = await temporal_predict_channels(audio_chunk, tone_prediction)
 
         # Forward results to the channel fuser
         async with httpx.AsyncClient(timeout=cc.HTTP_TIMEOUT) as client:
             await client.post(cc.CHANNEL_FUSER_URL, json=prediction.model_dump(mode="json"))
 
-    except AssertionError as exc:
+    except (AssertionError, ValidationError) as exc:
         # Validation errors indicate malformed payloads or outputs
-        logger.error(f"Chroma channel prediction failed for chunk: {chroma_chunk.chunk_index} of request_id: {chroma_chunk.request_id}: {exc}")
-        await _report_error(chroma_chunk.request_id, "channel_predictor", f"Chroma validation error: {exc}")
+        logger.error(
+            f"Temporal channel prediction failed for chunk: {audio_chunk.chunk_index} "
+            f"of request_id: {audio_chunk.request_id}: {exc}"
+        )
+        await _report_error(audio_chunk.request_id, "channel_predictor", f"Temporal validation error: {exc}")
     except (httpx.ReadTimeout, httpx.ReadError):
         # Downstream timeouts get reported to the gateway
-        logger.warning(f"Chroma downstream timeout for chunk: {chroma_chunk.chunk_index} of request_id: {chroma_chunk.request_id}")
-        await _report_error(chroma_chunk.request_id, "channel_predictor", "Chroma downstream timeout")
+        logger.warning(
+            f"Temporal downstream timeout for chunk: {audio_chunk.chunk_index} of request_id: {audio_chunk.request_id}"
+        )
+        await _report_error(audio_chunk.request_id, "channel_predictor", "Temporal downstream timeout")
     except Exception as exc:
         # Surface unexpected failures for debugging
-        logger.exception(f"Chroma channel prediction failed for chunk: {chroma_chunk.chunk_index} of request_id: {chroma_chunk.request_id}: {exc}")
-        await _report_error(chroma_chunk.request_id, "channel_predictor", f"Chroma processing error: {exc}")
+        logger.exception(
+            f"Temporal channel prediction failed for chunk: {audio_chunk.chunk_index} "
+            f"of request_id: {audio_chunk.request_id}: {exc}"
+        )
+        await _report_error(audio_chunk.request_id, "channel_predictor", f"Temporal processing error: {exc}")
 
 @app.post("/api/fft/channel_predictor")
 async def fft_channel_predictor(fft_chunk: ci.FFTChunk) -> JSONResponse:
@@ -216,7 +225,7 @@ async def fft_channel_predictor(fft_chunk: ci.FFTChunk) -> JSONResponse:
     try:
         # Validate incoming payload
         fft_chunk.validate_contents()
-    except AssertionError as exc:
+    except (AssertionError, ValidationError) as exc:
         # Validation errors are client errors
         logger.error(f"FFT data validation failed for chunk: {fft_chunk.chunk_index} of request_id: {fft_chunk.request_id}: {exc}")
         return JSONResponse(
@@ -248,7 +257,7 @@ async def cqt_channel_predictor(cqt_chunk: ci.CQTChunk) -> JSONResponse:
     try:
         # Validate incoming payload
         cqt_chunk.validate_contents()
-    except AssertionError as exc:
+    except (AssertionError, ValidationError) as exc:
         # Validation errors are client errors
         logger.error(f"CQT data validation failed for chunk: {cqt_chunk.chunk_index} of request_id: {cqt_chunk.request_id}: {exc}")
         return JSONResponse(
@@ -262,36 +271,39 @@ async def cqt_channel_predictor(cqt_chunk: ci.CQTChunk) -> JSONResponse:
     asyncio.create_task(_process_cqt_prediction(cqt_chunk))
     return JSONResponse(status_code=200, content={"status": 200, "message": "ACK; Features recieved"})
     
-@app.post("/api/chroma/channel_predictor")
-async def chroma_channel_predictor(chroma_chunk: ci.ChromaChunk) -> JSONResponse:
+@app.post("/api/temporal/channel_predictor")
+async def temporal_channel_predictor(audio_chunk: ci.AudioChunk) -> JSONResponse:
     """
-    Receive chroma features, validate the payload, and dispatch prediction work.
-    
+    Receive raw audio chunks, validate the payload, and dispatch temporal prediction work.
+
     Args:
-        chroma_chunk (ci.ChromaChunk): The incoming chroma features for a specific audio chunk.
-    
+        audio_chunk (ci.AudioChunk): The incoming raw audio chunk.
+
     Returns:
         JSONResponse: Acknowledgment of receipt and processing status.
     """
-    if chroma_chunk.request_id in _cancelled:
+    if audio_chunk.request_id in _cancelled:
         return {"status": 409, "message": "CANCELLED"}
-    if not getattr(chroma_chunk, "chunk_valid", True):
+    if not getattr(audio_chunk, "chunk_valid", True):
         return JSONResponse(status_code=200, content={"status": 200, "message": "IGNORED: invalid chunk"})
     try:
         # Validate incoming payload
-        chroma_chunk.validate_contents()
-    except AssertionError as exc:
+        audio_chunk.validate_contents()
+    except (AssertionError, ValidationError) as exc:
         # Validation errors are client errors
-        logger.error(f"Chroma data validation failed for chunk: {chroma_chunk.chunk_index} of request_id: {chroma_chunk.request_id}: {exc}")
+        logger.error(
+            f"Temporal data validation failed for chunk: {audio_chunk.chunk_index} "
+            f"of request_id: {audio_chunk.request_id}: {exc}"
+        )
         return JSONResponse(
             status_code=400,
-            content={"status": 400, "message": f"FAIL: Chroma data validation error: {exc}"},
+            content={"status": 400, "message": f"FAIL: Temporal data validation error: {exc}"},
         )
-        
-    # Acknowledge receipt and process asynchronously
-    logger.info(f"Received chroma features for chunk: {chroma_chunk.chunk_index} of request_id: {chroma_chunk.request_id}")
 
-    asyncio.create_task(_process_chroma_prediction(chroma_chunk))
+    # Acknowledge receipt and process asynchronously
+    logger.info(f"Received temporal features for chunk: {audio_chunk.chunk_index} of request_id: {audio_chunk.request_id}")
+
+    asyncio.create_task(_process_temporal_prediction(audio_chunk))
     return JSONResponse(status_code=200, content={"status": 200, "message": "ACK; Features recieved"})
 
 @app.post("/api/tone_identifier/channel_predictor")
@@ -310,7 +322,7 @@ async def tone_prediction_channel_predictor(tone_prediction: ci.TonePrediction) 
     try:
         # Validate incoming payload
         tone_prediction.validate_contents()
-    except AssertionError as exc:
+    except (AssertionError, ValidationError) as exc:
         # Validation errors are client errors
         logger.error(f"Tone Prediction data validation failed for request_id: {tone_prediction.request_id}: {exc}")
         return JSONResponse(

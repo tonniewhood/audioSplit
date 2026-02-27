@@ -17,7 +17,6 @@ case "${1:-help}" in
     echo "Starting all services …"
     python -m uvicorn transforms.fft:app                --host 0.0.0.0 --port 8001 --reload &
     python -m uvicorn transforms.cqt:app                --host 0.0.0.0 --port 8002 --reload &
-    python -m uvicorn transforms.chroma:app             --host 0.0.0.0 --port 8003 --reload &
     python -m uvicorn prediction.tone_identifier:app    --host 0.0.0.0 --port 8004 --reload &
     python -m uvicorn prediction.channel_predictor:app  --host 0.0.0.0 --port 8005 --reload &
     python -m uvicorn prediction.channel_fuser:app      --host 0.0.0.0 --port 8006 --reload &

@@ -381,113 +381,63 @@ class CQTChunk(BaseModel):
         assert self.bins.dtype == np.complex64, "CQT features must be in complex64 format."
 
 
-class ChromaChunk(BaseModel):
+class MelSpectrogram(BaseModel):
     """
-    Represents a chunk of audio data in the chroma domain. The chroma domain chunk SHALL adhere to the following specifications:
-
-    Boundary: Transforms[Chroma] -> (Tone Identifier | Channel Predictor)
-    Version: chroma_chunk_v1
-
-    Constraints:
-        - Array must have length 12
-        - dtype must be float32
-
-    Data Fields:
-        - request_id (str): Unique identifier for the request
-        - chunk_index (int): Index of the chunk within the audio file
-        - total_chunks (int): Total number of chunks the audio file is split into
-        - num_chroma (int): Number of classified pitches/chroma.
-        - valid_chunk (bool): Whether the chunk contains valid audio data and can be used for prediction/fusing
-        - dtype (np.uint8): Data type of the chroma output. Represents the pitch class (must be uint8)
-        - pitch_classes (np.ndarray): 1D array containing the chroma values for each pitch class
-    """
-
-    request_id: str
-    chunk_index: int
-    total_chunks: int
-    num_chroma: int
-    valid_chunk: bool
-    dtype: Literal["uint8"]
-    pitch_classes: NDArray[Shape[f"{cc.CHUNK_SIZE}"], np.uint8]  # type: ignore[reportInvalidTypeForm]
-    version: Literal["chroma_chunk_v1"] = "chroma_chunk_v1"
-
-    @field_validator("pitch_classes", mode="before")
-    @classmethod
-    def _cast_pitch_classes(cls, v):
-        """Coerce chroma pitch class input to a uint8 numpy array."""
-        return np.asarray(v, dtype=np.uint8)
-
-    @model_validator(mode="after")
-    def validate_chroma_chunk(self):
-        self.validate_contents()
-        return self
-
-    def validate_contents(self):
-        assert self.request_id, "Request ID is required in ChromaChunk."
-        assert len(self.request_id) <= cc.MAX_STR_LEN, "Request ID in ChromaChunk is too long."
-        assert self.chunk_index >= 0, "Chunk index in ChromaChunk must be non-negative."
-        assert self.total_chunks > 0, "Total chunks in ChromaChunk must be greater than zero."
-        assert self.chunk_index < self.total_chunks, "Chunk index in ChromaChunk must be less than total chunks."
-        assert self.num_chroma == cc.CHUNK_SIZE, f"Number of chroma bins must be equal to {cc.CHUNK_SIZE}."
-        assert self.dtype == "uint8", "Chroma features must be uint8."
-        assert isinstance(self.pitch_classes, np.ndarray), "Chroma features must be a numpy array."
-        assert self.pitch_classes.ndim == 1, "Chroma features must be a 1D array."
-        assert self.pitch_classes.dtype == np.uint8, "Chroma features must be uint8."
-
-
-class Spectrogram(BaseModel):
-    """
-    Represents a spectrogram of audio data. The spectrogram SHALL adhere to the following specifications:
+    Represents a mel spectrogram of audio data. The mel spectrogram SHALL adhere to the following specifications:
 
     Boundary: Tone Identifier -> Tone Identifier
-    Version: spectrogram_v1
+    Version: mel_spectrogram_v1
 
     Constraints:
         - Array must have 2 dimensions
         - dtype must be float32
-        - num_bins == 1024
-        - num_frames == 12
+        - num_mels == 128
 
     Data Fields:
         - request_id (str): Unique identifier for the request
-        - num_bins (int): Number of frequency bins (must be 1024)
-        - num_frames (int): Number of time frames (must be 12)
-        - dtype (np.float32): Data type of the spectrogram (must be float32)
-        - spectrogram (np.ndarray): 2D array containing the spectrogram values
+        - num_mels (int): Number of mel bins (must be 128)
+        - num_frames (int): Number of time frames
+        - hop_length (int): Hop length used for the mel spectrogram
+        - dtype (np.float32): Data type of the mel spectrogram (must be float32)
+        - mel_spectrogram (np.ndarray): 2D array containing the mel spectrogram values
         - sample_rate (int): Sample rate of the original audio (must be 44100 Hz)
     """
 
     request_id: str
-    num_bins: int
+    num_mels: int
     num_frames: int
+    hop_length: int
     dtype: Literal["float32"]
-    spectrogram: NDArray[Shape[f"{cc.CHUNK_SIZE}, {cc.SPEC_FRAMES}"], np.float32]  # type: ignore[reportInvalidTypeForm]
+    mel_spectrogram: NDArray[Shape["*, *"], np.float32]  # type: ignore[reportInvalidTypeForm]
     sample_rate: int = 44100
-    version: Literal["spectrogram_v1"] = "spectrogram_v1"
+    version: Literal["mel_spectrogram_v1"] = "mel_spectrogram_v1"
 
-    @field_validator("spectrogram", mode="before")
+    @field_validator("mel_spectrogram", mode="before")
     @classmethod
     def _cast_spectrogram(cls, v):
-        """Coerce spectrogram input to a float32 numpy array."""
+        """Coerce mel spectrogram input to a float32 numpy array."""
         return np.asarray(v, dtype=np.float32)
 
     @model_validator(mode="after")
-    def validate_spectrogram(self):
+    def validate_mel_spectrogram(self):
         self.validate_contents()
         return self
 
     def validate_contents(self):
-        assert self.request_id, "Request ID is required in Spectrogram."
-        assert len(self.request_id) <= cc.MAX_STR_LEN, "Request ID in Spectrogram is too long."
-        assert self.num_bins > 0, "num_bins must be positive."
+        assert self.request_id, "Request ID is required in MelSpectrogram."
+        assert len(self.request_id) <= cc.MAX_STR_LEN, "Request ID in MelSpectrogram is too long."
+        assert self.num_mels > 0, "num_mels must be positive."
         assert self.num_frames > 0, "num_frames must be positive."
-        assert self.num_bins == cc.CHUNK_SIZE, f"num_bins must be {cc.CHUNK_SIZE}."
-        assert self.num_frames == cc.SPEC_FRAMES, f"num_frames must be {cc.SPEC_FRAMES}."
-        assert self.dtype == "float32", "Spectrogram dtype must be float32."
-        assert isinstance(self.spectrogram, np.ndarray), "Spectrogram must be a numpy array."
-        assert self.spectrogram.ndim == 2, "Spectrogram must be a 2D array."
-        assert self.spectrogram.dtype == np.float32, "Spectrogram array must be float32."
-        assert self.spectrogram.shape == (self.num_bins, self.num_frames), "Spectrogram shape must match (num_bins, num_frames)."
+        assert self.hop_length > 0, "hop_length must be positive."
+        assert self.num_mels == cc.MEL_N_MELS, f"num_mels must be {cc.MEL_N_MELS}."
+        assert self.dtype == "float32", "MelSpectrogram dtype must be float32."
+        assert isinstance(self.mel_spectrogram, np.ndarray), "Mel spectrogram must be a numpy array."
+        assert self.mel_spectrogram.ndim == 2, "Mel spectrogram must be a 2D array."
+        assert self.mel_spectrogram.dtype == np.float32, "Mel spectrogram array must be float32."
+        assert self.mel_spectrogram.shape == (
+            self.num_mels,
+            self.num_frames,
+        ), "Mel spectrogram shape must match (num_mels, num_frames)."
         assert self.sample_rate == cc.SAMPLE_RATE, f"Sample rate must be {cc.SAMPLE_RATE} Hz."
 
 
@@ -562,7 +512,7 @@ class PredictedChunk(BaseModel):
         - total_chunks (int): Total number of chunks the audio file is split into
         - num_classes (int): Number of sound classifications (must be 5)
         - num_samples (int): Number of samples in the predicted chunk (must be <= 1024)
-        - prediction_source (str): The source of the prediction (e.g., "fft", "cqt", "chroma")
+        - prediction_source (str): The source of the prediction (e.g., "fft", "cqt", "temporal")
         - dtype (np.float32): Data type of the predicted chunk (must be float32)
         - predictions (np.ndarray): 2D array containing the predicted values for each sound classification and sample
         - chunk_valid (bool): Whether this chunk should be used in downstream fusion
@@ -599,7 +549,11 @@ class PredictedChunk(BaseModel):
         assert self.num_classes == len(SoundClassifications), f"num_classes must be {len(SoundClassifications)}."
         assert self.num_samples > 0, "num_samples must be positive."
         assert self.num_samples <= cc.CHUNK_SIZE, f"num_samples must be <= {cc.CHUNK_SIZE}."
-        assert self.prediction_source in {"fft", "cqt", "chroma"}, "prediction_source must be one of 'fft', 'cqt', or 'chroma'."
+        assert self.prediction_source in {
+            "fft",
+            "cqt",
+            "temporal",
+        }, "prediction_source must be one of 'fft', 'cqt', or 'temporal'."
         assert self.dtype == "float32", "PredictedChunk dtype must be float32."
         assert isinstance(self.predictions, np.ndarray), "Predictions must be a numpy array."
         assert self.predictions.ndim == 2, "Predictions must be a 2D array."
@@ -755,7 +709,7 @@ class ChunkBuffer:
             return np.empty((0, 0), dtype=np.float32)
         arr = np.concatenate(list(self.buffer), axis=0)
         if len(arr) < self.max_chunks * cc.CHUNK_SIZE:
-            padding = np.zeros((self.max_chunks - len(arr), cc.CHUNK_SIZE), dtype=np.float32)
+            padding = np.zeros(self.max_chunks * cc.CHUNK_SIZE - len(arr), dtype=np.float32)
             arr = np.concatenate((arr, padding), axis=0)
 
         return arr

@@ -99,7 +99,14 @@ async function pollForResult(requestId) {
             const url = URL.createObjectURL(blob);
             const link = document.createElement("a");
             link.href = url;
-            link.download = `${requestId}.wav`;
+            const headerFilename = fileRes.headers.get("x-result-filename");
+            const contentDisposition = fileRes.headers.get("content-disposition");
+            let filename = headerFilename || `${requestId}.wav`;
+            if (!headerFilename && contentDisposition) {
+                const match = contentDisposition.match(/filename="?([^"]+)"?/);
+                if (match) filename = match[1];
+            }
+            link.download = filename;
             document.body.appendChild(link);
             link.click();
             link.remove();

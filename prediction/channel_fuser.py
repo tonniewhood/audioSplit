@@ -28,6 +28,7 @@ import numpy as np
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from numpy.typing import NDArray
+from pydantic import ValidationError
 
 import common.constants as cc
 import common.interfaces as ci
@@ -217,7 +218,7 @@ async def channel_fuser(predicted_chunk: ci.PredictedChunk) -> JSONResponse:
                         f"valid_sources={len(chunk_list)}/{cc.NUM_PREDICTORS}"
                     )
                 request_chunks.pop(predicted_chunk.chunk_index, None)
-    except AssertionError as exc:
+    except (AssertionError, ValidationError) as exc:
         # Validation errors are client errors
         logger.error(f"Invalid predicted chunk received: {exc}")
         return JSONResponse(

@@ -25,6 +25,7 @@ import httpx
 import numpy as np
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
 import common.constants as cc
 import common.interfaces as ci
@@ -115,7 +116,7 @@ async def cqt(chunk: ci.AudioChunk) -> JSONResponse:
         # Acknowledge receipt and process asynchronously
         logger.info(f"Received chunk: {chunk.chunk_index} for request_id: {chunk.request_id}")
         asyncio.create_task(_process_cqt_chunk(chunk))
-    except AssertionError as exc:
+    except (AssertionError, ValidationError) as exc:
         # Validation errors are client errors
         logger.error(f"CQT data validation failed for chunk: {chunk.chunk_index} of request_id: {chunk.request_id}: {exc}")
         return JSONResponse(

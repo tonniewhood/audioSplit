@@ -3,7 +3,7 @@ Primary application for the "Gateway" Service in the audio processing pipeline.
 This is the primary contact point for the web application and is responsible for:
 - Receiving audio file uploads from the web application.
 - Chunking the audio file into 1024-sample segments (if necessary/possible).
-- Forwarding the audio chunks to the three transform services (FFT, CQT, Chroma).
+- Forwarding the audio chunks to the transform services (FFT, CQT) and temporal predictor.
 - Awaiting the results from the channel fuser and returning the final response to the web application.
 
 The Gateway app adheres to the following Contract:
@@ -15,8 +15,8 @@ Boundary: ** (Internal) **
 Uses `InputAudioFile` to convert and validate the input audio file
 Uses `AudioChunk` dataclass to split the audio file into 1024-sample segments (if necessary/possible)
 
-Boundary: ** Gateway -> Transforms (FFT, CQT, Chroma) **
-Uses `FFTChunk`, `CQTChunk`, and `ChromaChunk` dataclasses for the outgoing audio chunks (depending on the transform)
+Boundary: ** Gateway -> Transforms (FFT, CQT) / Temporal Predictor **
+Uses `FFTChunk`, `CQTChunk`, and `AudioChunk` dataclasses for the outgoing audio chunks (depending on the target)
 
 Boundary: ** Fusion -> Gateway **
 Uses `OutputAudioFile` dataclass for the final fused audio file response from the channel fuser
@@ -48,6 +48,7 @@ from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import ValidationError
 import common.constants as cc
 import common.interfaces as ci
 from common.logging_utils import setup_logging
@@ -66,13 +67,13 @@ pending_events: Dict[str, asyncio.Event] = {}
 pending_results: Dict[str, ci.OutputAudioFile] = {}
 request_status: Dict[str, str] = {}
 request_errors: Dict[str, str] = {}
+request_filenames: Dict[str, str] = {}
 result_paths: Dict[str, Path] = {}
 _cancelled_requests: set[str] = set()
 
 CANCEL_URLS = [
     cc.FFT_CANCEL_URL,
     cc.CQT_CANCEL_URL,
-    cc.CHROMA_CANCEL_URL,
     cc.TONE_IDENTIFIER_CANCEL_URL,
     cc.CHANNEL_PREDICTOR_CANCEL_URL,
     cc.CHANNEL_FUSER_CANCEL_URL,
@@ -87,12 +88,14 @@ async def create_input_file(request_id: str, file: UploadFile) -> ci.InputAudioF
     assert len(request_id) <= cc.MAX_STR_LEN, "Request ID is too long."
     assert file.filename, "Filename is required."
     assert len(file.filename) <= cc.MAX_STR_LEN, "Filename is too long."
-    assert file.content_type in cc.ALLOWED_CONTENT_TYPES, (
-        f"Invalid file type. Allowed types: {', '.join(cc.ALLOWED_CONTENT_TYPES)}."
-    )
+    assert (
+        file.content_type in cc.ALLOWED_CONTENT_TYPES
+    ), f"Invalid file type. Allowed types: {', '.join(cc.ALLOWED_CONTENT_TYPES)}."
+
+    request_filenames[request_id] = file.filename
 
     data, sample_rate = librosa_load(file.file, sr=cc.SAMPLE_RATE, mono=True)
-    
+
     return ci.InputAudioFile(
         request_id=request_id,
         channels=1,
@@ -107,11 +110,11 @@ async def create_input_file(request_id: str, file: UploadFile) -> ci.InputAudioF
 
 async def send_to_transforms(chunk: ci.AudioChunk) -> bool:
     """
-    Sends the initial payload to each of the transform services (FFT, CQT, Chroma).
-    
+    Sends the initial payload to each of the transform services (FFT, CQT) and the temporal predictor.
+
     Args:
         chunk (AudioChunk): The audio chunk to be processed.
-        
+
     Returns:
         bool: True if the operation was successful, False otherwise.
     """
@@ -120,7 +123,7 @@ async def send_to_transforms(chunk: ci.AudioChunk) -> bool:
             await asyncio.gather(
                 client.post(cc.FFT_URL, json=chunk.model_dump(mode="json")),
                 client.post(cc.CQT_URL, json=chunk.model_dump(mode="json")),
-                client.post(cc.CHROMA_URL, json=chunk.model_dump(mode="json")),
+                client.post(cc.build_predictor_url("temporal"), json=chunk.model_dump(mode="json")),
             )
     except (httpx.ReadTimeout, httpx.ReadError):
         logger.warning(f"Downstream timeout for chunk: {chunk.chunk_index} of request_id: {chunk.request_id}")
@@ -130,17 +133,18 @@ async def send_to_transforms(chunk: ci.AudioChunk) -> bool:
         pending_events.pop(chunk.request_id, None)
         pending_results.pop(chunk.request_id, None)
         return False
-        
+
     return True
+
 
 async def await_fuser(request_id: str, timeout: float = cc.FUSER_TIMEOUT) -> ci.OutputAudioFile | None:
     """
     Waits for the final result from the channel fuser for a given request ID.
-    
+
     Args:
         request_id (str): The unique identifier for the request.
         timeout (float): Maximum time to wait for the result in seconds.
-        
+
     Returns:
         OutputAudioFile | None: The final fused audio file if received within the timeout, otherwise None.
     """
@@ -154,11 +158,13 @@ async def await_fuser(request_id: str, timeout: float = cc.FUSER_TIMEOUT) -> ci.
     except asyncio.TimeoutError:
         pending_events.pop(request_id, None)
         return pending_results.pop(request_id, None)
-        
+
+
 @app.get("/")
 async def root():
     """Serves the main HTML page for the web application."""
     return HTMLResponse(content=INDEX_HTML.read_text(encoding="utf-8"))
+
 
 @app.post("/api/alert")
 async def alert(
@@ -167,24 +173,30 @@ async def alert(
 ) -> JSONResponse:
     """
     Endpoint to receive the uploaded audio file from the web application, validate it, chunk it, and forward the chunks to the transform services.
-    
+
     Args:
         request_id (str): The unique identifier for the request, provided as a form field.
         file (UploadFile): The uploaded audio file, provided as a file field.
-        
+
     Returns:
         RestResponse: A response object containing the result of the operation.
     """
     # target_path = await write_temp_file(request_id, file)
     logger.info(f"Received file: {file.filename} with request_id: {request_id}")
-    
+
     try:
         audio_file = await create_input_file(request_id, file)
-    except AssertionError as exc:
+    except (AssertionError, ValidationError) as exc:
         logger.error(f"File validation failed: {exc}")
         return JSONResponse(
             status_code=400,
             content={"status": 400, "message": f"Failed to validate file. {exc}"},
+        )
+    except Exception as exc:
+        logger.exception(f"Failed to process file for request_id: {request_id}: {exc}")
+        return JSONResponse(
+            status_code=400,
+            content={"status": 400, "message": "Internal service error"},
         )
 
     request_status[request_id] = "pending"
@@ -209,33 +221,34 @@ async def alert(
                 content={"status": 504, "message": "Internal service error"},
             )
 
-    return JSONResponse(status_code=200, content={"status": 200, "request_id": request_id})
+    return JSONResponse(status_code=200, content={"status": 200, "message": "ACK"})
+
 
 @app.post("/api/final")
 async def final(output_file: ci.OutputAudioFile) -> JSONResponse:
     """
     Endpoing to receive the final fused audio file from the channel fuser and return the response to the web application.
-    
+
     Args:
         output_file: The OutputAudioFile object containing the final fused audio data.
-        
+
     Returns:
         A JSON response containing the final result message.
     """
     try:
         output_file.validate_contents()
-    except AssertionError as exc:
+    except (AssertionError, ValidationError) as exc:
         logger.error(f"Output file validation failed: {exc}")
         return JSONResponse(
             status_code=400,
             content={"status": 400, "message": f"FAIL (Output file validation error): {exc}"},
         )
-    
+
     logger.info(f"Final response received with request_id: {output_file.request_id}")
     pending_results[output_file.request_id] = output_file
 
     RESULT_DIR.mkdir(exist_ok=True)
-    out_path = RESULT_DIR / f"{output_file.request_id}.wav"
+    out_path = RESULT_DIR / f"{request_filenames.get(output_file.request_id, output_file.request_id)}-split.wav"
 
     waveform = output_file.waveform
     if waveform.ndim == 1:
@@ -268,10 +281,7 @@ async def error(payload: ci.ErrorPayload) -> JSONResponse:
     try:
         async with httpx.AsyncClient(timeout=cc.HTTP_ERROR_TIMEOUT) as client:
             await asyncio.gather(
-                *[
-                    client.post(f"{url}/{payload.request_id}")
-                    for url in CANCEL_URLS
-                ],
+                *[client.post(f"{url}/{payload.request_id}") for url in CANCEL_URLS],
                 return_exceptions=True,
             )
     except httpx.ReadTimeout:
@@ -298,4 +308,6 @@ async def result(request_id: str):
     path = result_paths.get(request_id)
     if not path or not path.exists():
         return JSONResponse(status_code=404, content={"status": "not_found"})
-    return FileResponse(path, media_type="audio/wav", filename=path.name)
+    response = FileResponse(path, media_type="audio/wav", filename=path.name)
+    response.headers["X-Result-Filename"] = path.name
+    return response
